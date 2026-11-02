@@ -257,9 +257,35 @@ if [[ -z "$NODE" ]]; then
   for candidate in "${CANDIDATES[@]}"; do
     if timeout 4 asterisk -rx "rpt show variables $candidate" 2>/dev/null | grep -q '^ *RPT_'; then VALID+=("$candidate"); fi
   done
-  if [[ ${#VALID[@]} -eq 1 ]]; then NODE="${VALID[0]}";
-  elif [[ ${#VALID[@]} -eq 0 ]]; then die "unable to auto-detect one local app_rpt node; rerun with --node NODE";
-  else echo "ERROR: multiple local app_rpt nodes detected: ${VALID[*]}" >&2; echo "Rerun with --node NODE; the installer will not guess." >&2; exit 1; fi
+  # ASL private nodes are numbered below 2000.
+  PUBLIC=()
+  for candidate in "${VALID[@]}"; do
+    if (( 10#$candidate >= 2000 )); then
+      PUBLIC+=("$candidate")
+    fi
+  done
+
+  if (( ${#PUBLIC[@]} == 1 )); then
+    NODE="${PUBLIC[0]}"
+    echo "[INFO] Automatically selected public ASL node $NODE"
+  elif (( ${#PUBLIC[@]} == 0 )); then
+    die "No public app_rpt node detected; use --node NODE"
+  else
+    echo "Multiple public app_rpt nodes detected:"
+    for i in "${!PUBLIC[@]}"; do
+      printf '  %d) %s\n' "$((i+1))" "${PUBLIC[i]}"
+    done
+    [[ -t 0 ]] || die "Use --node NODE for unattended installation"
+    while true; do
+      read -r -p "Select public node [1-${#PUBLIC[@]}]: " choice || die "Node selection cancelled"
+      if [[ "$choice" =~ ^[1-9][0-9]*$ ]] &&
+         (( choice <= ${#PUBLIC[@]} )); then
+        NODE="${PUBLIC[choice-1]}"
+        break
+      fi
+      echo "Invalid selection."
+    done
+  fi
 fi
 if ! timeout 5 asterisk -rx "rpt show variables $NODE" 2>/dev/null | grep -q '^ *RPT_'; then
   die "Asterisk/app_rpt did not return runtime variables for node $NODE"
