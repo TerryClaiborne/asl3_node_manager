@@ -1,0 +1,11 @@
+/config.ini
+/run/
+/cache/
+*.local
+*.pre-*
+*.bak
+*.bak.*
+*.orig
+*.rej
+*.pyc
+__pycache__/

@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+APP_DIR="/var/www/html/asl3_node_manager"
+STATUS="$APP_DIR/bin/asl3-node-manager-status.py"
+CONTROL="$APP_DIR/bin/asl3-node-manager-control.py"
+APPEARANCE="$APP_DIR/bin/asl3-node-manager-appearance.php"
+CONFIG="$APP_DIR/config.ini"
+usage(){ echo "Usage: $0 ACTION NODE [TARGET] [REASON]" >&2; exit 2; }
+[[ $# -ge 2 && $# -le 4 ]] || usage
+action="$1"; node="$2"; target="${3:-}"; reason="${4:-}"
+[[ "$node" =~ ^[0-9]+$ ]] || { echo "ERROR: invalid node" >&2; exit 2; }
+[[ -r "$CONFIG" ]] || { echo "ERROR: configuration not readable" >&2; exit 2; }
+configured_node="$(sed -nE 's/^MYNODE="?([0-9]+)"?.*/\1/p' "$CONFIG" | head -n1)"
+[[ "$configured_node" =~ ^[0-9]+$ ]] || { echo "ERROR: configured ASL3 node target is invalid" >&2; exit 2; }
+[[ "$configured_node" == "$node" ]] || { echo "ERROR: node is not the configured ASL3 node target" >&2; exit 2; }
+case "$action" in
+  backup-download)
+    [[ "$target" =~ ^ASL3-config-[0-9]{4}-[0-9]{2}-[0-9]{2}-T[0-9]{6}Z\.tar\.gz$ && -z "$reason" ]] || usage
+    backup="/var/backups/asl3-node-manager/asl3-config/$target"
+    [[ -f "$backup" && ! -L "$backup" ]] || { echo "Backup unavailable" >&2; exit 1; }
+    exec /bin/cat -- "$backup"
+    ;;
+  official-backup-download)
+    [[ "$target" =~ ^ASL_[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{4}\.tgz$ && -z "$reason" ]] || usage
+    backup="/var/asl-backups/$target"
+    [[ -f "$backup" && ! -L "$backup" ]] || { echo "Official backup unavailable" >&2; exit 1; }
+    exec /bin/cat -- "$backup"
+    ;;
+  services)
+    [[ -z "$target" && -z "$reason" ]] || usage
+    exec /usr/bin/python3 "$APP_DIR/bin/asl3-node-manager-services.py"
+    ;;
+  status)
+    [[ -z "$target" && -z "$reason" ]] || usage
+    exec /usr/bin/python3 "$STATUS" --node "$node" --json
+    ;;
+  appearance)
+    [[ -z "$target" && -z "$reason" ]] || usage
+    exec /usr/bin/php "$APPEARANCE"
+    ;;
+  disconnect-all|incoming-block|incoming-allow|node-offline|node-restore)
+    [[ -z "$target" && -z "$reason" ]] || usage
+    exec /usr/bin/python3 "$CONTROL" --node "$node" --action "$action"
+    ;;
+  disconnect|restore)
+    [[ -n "$target" && -z "$reason" ]] || usage
+    exec /usr/bin/python3 "$CONTROL" --node "$node" --action "$action" --target "$target"
+    ;;
+  block)
+    [[ -n "$target" ]] || usage
+    exec /usr/bin/python3 "$CONTROL" --node "$node" --action "$action" --target "$target" --reason "$reason"
+    ;;
+  *) echo "ERROR: unsupported action" >&2; exit 2 ;;
+esac

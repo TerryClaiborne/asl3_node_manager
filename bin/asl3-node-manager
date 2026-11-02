@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -euo pipefail
+APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CONFIG="$APP_DIR/config.ini"
+INSTALLED_HELPER="/usr/local/libexec/asl3-node-manager-helper"
+SOURCE_HELPER="$APP_DIR/bin/asl3-node-manager-helper"
+usage(){ cat <<'USAGE'
+ASL3 Node Manager
+Usage:
+  asl3-node-manager status [--json] [--node NODE]
+  asl3-node-manager disconnect TARGET [--node NODE]
+  asl3-node-manager block TARGET [REASON] [--node NODE]
+  asl3-node-manager restore TARGET [--node NODE]
+  asl3-node-manager disconnect-all [--node NODE]
+  asl3-node-manager incoming-block [--node NODE]
+  asl3-node-manager incoming-allow [--node NODE]
+  asl3-node-manager node-offline [--node NODE]
+  asl3-node-manager node-restore [--node NODE]
+  asl3-node-manager version
+
+Web and terminal controls use the same restricted helper/control engine.
+USAGE
+}
+[[ -r "$CONFIG" ]] || { echo "ERROR: missing $CONFIG" >&2; exit 1; }
+configured_node="$(sed -nE 's/^MYNODE="?([0-9]+)"?.*/\1/p' "$CONFIG" | head -n1)"
+[[ "$configured_node" =~ ^[0-9]+$ ]] || { echo "ERROR: MYNODE is not configured" >&2; exit 2; }
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  version) cat "$APP_DIR/VERSION"; exit 0 ;;
+  status|disconnect|block|restore|disconnect-all|incoming-block|incoming-allow|node-offline|node-restore) ;;
+  --help|-h|"") usage; exit 0 ;;
+  *) echo "ERROR: unknown command $cmd" >&2; usage; exit 2 ;;
+esac
+node="$configured_node"; json=0; target=""; reason=""
+case "$cmd" in
+  disconnect|restore)
+    [[ $# -gt 0 ]] || { echo "ERROR: $cmd requires TARGET" >&2; exit 2; }
+    target="$1"; shift
+    ;;
+  block)
+    [[ $# -gt 0 ]] || { echo "ERROR: block requires TARGET" >&2; exit 2; }
+    target="$1"; shift
+    if [[ $# -gt 0 && "$1" != --* ]]; then reason="$1"; shift; fi
+    ;;
+esac
+while (($#)); do
+  case "$1" in
+    --json) [[ "$cmd" == status ]] || { echo "ERROR: --json is status-only" >&2; exit 2; }; json=1 ;;
+    --node) shift; [[ $# -gt 0 ]] || { echo "ERROR: --node requires value" >&2; exit 2; }; node="$1" ;;
+    --help|-h) usage; exit 0 ;;
+    *) echo "ERROR: unknown option $1" >&2; usage; exit 2 ;;
+  esac
+  shift
+done
+[[ "$node" =~ ^[0-9]+$ ]] || { echo "ERROR: configured ASL3 node is not numeric" >&2; exit 2; }
+if [[ "$cmd" == status ]]; then
+  if (( json == 1 )); then exec /usr/bin/python3 "$APP_DIR/bin/asl3-node-manager-status.py" --node "$node" --json; fi
+  exec /usr/bin/python3 "$APP_DIR/bin/asl3-node-manager-status.py" --node "$node"
+fi
+helper="$INSTALLED_HELPER"; [[ -x "$helper" ]] || helper="$SOURCE_HELPER"
+args=("$helper" "$cmd" "$node")
+[[ -n "$target" ]] && args+=("$target")
+[[ -n "$reason" ]] && args+=("$reason")
+if (( EUID == 0 )); then exec "${args[@]}"; fi
+exec sudo -n "${args[@]}"

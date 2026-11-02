@@ -1,0 +1,10 @@
+<?php
+declare(strict_types=1);
+require_once __DIR__ . '/../src/bootstrap.php';
+if (!manager_auth_enabled()) { header('Location: index.php'); exit; }
+if (manager_is_logged_in()) { header('Location: index.php'); exit; }
+$error = '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST') { if (manager_login((string)($_POST['password'] ?? ''))) { header('Location: index.php'); exit; } $error = 'Incorrect password.'; }
+$version = manager_version(); $appearance = manager_appearance(); $style = manager_appearance_style($appearance);
+?>
+<!doctype html><html lang="en" data-theme="<?=htmlspecialchars($appearance['theme'],ENT_QUOTES,'UTF-8')?>" data-palette="<?=htmlspecialchars($appearance['mode'],ENT_QUOTES,'UTF-8')?>"<?= $style!==''?' style="'.htmlspecialchars($style,ENT_QUOTES,'UTF-8').'"':'' ?>><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="light dark"><title>Login · ASL3 Node Manager</title><link rel="stylesheet" href="assets/style.css?v=<?=rawurlencode($version)?>"></head><body><div class="login-shell"><form class="login-card" method="post"><div class="brand login-brand"><div class="brand-mark" aria-hidden="true"><svg class="brand-star-svg" viewBox="0 0 72 72" aria-hidden="true"><path class="star-outline" d="M36 4 44 25 67 26 49 40 55 64 36 51 17 64 23 40 5 26 28 25Z"/><path class="star-wave wave-one" d="M19 31c5-6 10-6 15 0s10 6 15 0"/><path class="star-wave wave-two" d="M16 39c7-8 14-8 21 0s14 8 21 0"/><circle class="star-center" cx="36" cy="35" r="3.5"/></svg></div><div><h1>ASL3 Node Manager</h1><div class="subtitle">Administrator login</div></div></div><?php if($error!==''):?><div class="login-error"><?=htmlspecialchars($error,ENT_QUOTES,'UTF-8')?></div><?php endif;?><label>Password<input type="password" name="password" autofocus autocomplete="current-password"></label><button class="primary-btn" type="submit">Login</button><a class="cancel-link" href="index.php">Cancel</a></form></div></body></html>
