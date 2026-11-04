@@ -72,6 +72,7 @@ function manager_appearance_defaults(): array
     return [
         'theme' => 'dark',
         'mode' => 'default',
+        'audio_alerts' => false,
         'profiles' => [
             'dark' => [
                 'background'=>'#080E19','foreground'=>'#121D2F','text'=>'#F2F5FF',
@@ -96,7 +97,11 @@ function manager_appearance_validate(array $input): ?array
     if (!in_array($mode, ['default','advanced'], true)) return null;
     $profiles = $input['profiles'] ?? null;
     if (!is_array($profiles)) $profiles = $defaults['profiles'];
-    $out = ['theme'=>$theme,'mode'=>$mode,'profiles'=>[]];
+    // A small persisted preference alongside the existing server-side theme.
+    // Older appearance files without this field remain valid and default off.
+    $audioAlerts = $input['audio_alerts'] ?? $defaults['audio_alerts'];
+    if (!is_bool($audioAlerts)) return null;
+    $out = ['theme'=>$theme,'mode'=>$mode,'audio_alerts'=>$audioAlerts,'profiles'=>[]];
     foreach (['dark','light'] as $which) {
         $src = is_array($profiles[$which] ?? null) ? $profiles[$which] : $defaults['profiles'][$which];
         $profile = [];

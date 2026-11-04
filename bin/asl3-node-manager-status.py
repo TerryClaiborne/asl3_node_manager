@@ -72,10 +72,13 @@ def manager_config():
     host = "127.0.0.1"
     port = 5038
     if parser.has_section("general"):
-        bind = parser.get("general", "bindaddr", fallback="").strip()
-        if bind and bind not in ("0.0.0.0", "::"):
+        # configparser does not strip Asterisk's inline comments by default.
+        # These characters cannot occur in a valid bind address or port;
+        # trim comments only for these network fields, never AMI secrets.
+        bind = parser.get("general", "bindaddr", fallback="").split(";", 1)[0].split("#", 1)[0].strip()
+        if bind and bind not in ("0.0.0.0", "0.0.0.0/0", "::", "::/0"):
             host = bind
-        raw_port = parser.get("general", "port", fallback="").strip()
+        raw_port = parser.get("general", "port", fallback="").split(";", 1)[0].split("#", 1)[0].strip()
         if raw_port.isdigit():
             port = int(raw_port)
     user = secret = ""
@@ -130,13 +133,11 @@ def fetch_sawstat(node):
     stream = None
     try:
         sock = socket.create_connection((host, port), timeout=2.0)
-        sock.settimeout(2.0)
+        sock.settimeout(1.25)
         stream = sock.makefile("rb")
-        # Consume the AMI greeting block before the first action.
-        while True:
-            line = stream.readline()
-            if not line or line in (b"\r\n", b"\n"):
-                break
+        # The AMI greeting is commonly a *single* banner line with no empty
+        # separator. Do not wait for an empty line here. The action reader
+        # ignores the banner and matches the first action's ActionID.
         login_id = f"node_manager_login_{os.getpid()}"
         login = ami_action(sock, stream, {
             "Action": "Login", "Username": user, "Secret": secret, "Events": "0"
@@ -147,10 +148,8 @@ def fetch_sawstat(node):
         saw = ami_action(sock, stream, {
             "Action": "RptStatus", "Command": "SawStat", "Node": str(node)
         }, saw_id)
-        try:
-            ami_action(sock, stream, {"Action": "Logoff"}, f"node_manager_logoff_{os.getpid()}")
-        except Exception:
-            pass
+        # Closing the socket ends this short read-only AMI session; avoid
+        # an extra Logoff response wait on every one-second status poll.
     except Exception:
         return {}
     finally:
@@ -165,6 +164,58 @@ def fetch_sawstat(node):
         except Exception:
             pass
     return parse_sawstat_lines(saw)
+
+
+def fetch_xstat_modes(node):
+    """Read XStat LinkedNodes modes, as in AllStar Connect Monitor.php.
+
+    This is requested only by a Link control operation, never on periodic
+    dashboard polls. Unreported modes remain unknown, not Transceive.
+    """
+    cfg = manager_config()
+    if cfg is None:
+        return {}
+    host, port, user, secret = cfg
+    sock = stream = None
+    try:
+        sock = socket.create_connection((host, port), timeout=2.0)
+        sock.settimeout(1.25)
+        stream = sock.makefile("rb")
+        login_id = f"nm_link_login_{os.getpid()}"
+        login = ami_action(sock, stream, {
+            "Action": "Login", "Username": user, "Secret": secret, "Events": "0"
+        }, login_id)
+        if not any("Authentication accepted" in line for line in login):
+            return {}
+        xstat_id = f"nm_link_xstat_{os.getpid()}"
+        lines = ami_action(sock, stream, {
+            "Action": "RptStatus", "Command": "XStat", "Node": str(node)
+        }, xstat_id)
+        return parse_xstat_modes(lines)
+    except (OSError, ValueError, RuntimeError):
+        return {}
+    finally:
+        if stream is not None:
+            stream.close()
+        if sock is not None:
+            sock.close()
+
+
+def parse_xstat_modes(lines):
+    """Map only explicitly reported LinkedNodes (T/R); no inferred mode."""
+    modes = {}
+    for line in lines:
+        match = re.search(r"(?:^|\s)LinkedNodes:\s*(.*)$", str(line))
+        if not match:
+            continue
+        for item in match.group(1).split(','):
+            item = item.strip()
+            if len(item) < 2 or item[0] not in ('T', 'R'):
+                continue
+            ident = item[1:]
+            if re.fullmatch(r"[A-Za-z0-9_.:@-]{1,64}", ident):
+                modes[ident] = item[0]
+    return modes
 
 
 def parse_sawstat_lines(lines):

@@ -226,17 +226,17 @@ required=(
   VERSION README.md config.ini.example .gitignore tree.txt
   bin/asl3-node-manager-status.py bin/asl3-node-manager-control.py bin/asl3-node-manager-echolink.php
   bin/asl3-node-manager-appearance.php bin/asl3-node-manager-helper bin/asl3-node-manager
-  bin/asl3-node-manager-services.py bin/asl3-node-manager-system-metrics.py public/services.php public/backup_download.php
+  bin/asl3-node-manager-services.py bin/asl3-node-manager-system-metrics.py bin/asl3-node-manager-link.py bin/echolink_guard.py bin/asl3-node-manager-link-lookup.php public/link.php public/services.php public/backup_download.php
   public/index.php public/status.php public/action.php public/login.php public/logout.php
   public/assets/app.js public/assets/style.css src/bootstrap.php src/auth.php
   src/NodeIdentity.php src/EchoLink.php src/CacheMaintenance.php
 )
 for file in "${required[@]}"; do [[ -f "$SOURCE_DIR/$file" ]] || die "source missing: $file"; done
 
-for file in public/index.php public/status.php public/action.php public/login.php public/logout.php src/bootstrap.php src/auth.php src/NodeIdentity.php src/EchoLink.php src/CacheMaintenance.php bin/asl3-node-manager-echolink.php bin/asl3-node-manager-appearance.php public/services.php public/backup_download.php; do
+for file in public/index.php public/status.php public/action.php public/login.php public/logout.php src/bootstrap.php src/auth.php src/NodeIdentity.php src/EchoLink.php src/CacheMaintenance.php bin/asl3-node-manager-echolink.php bin/asl3-node-manager-appearance.php public/services.php public/backup_download.php public/link.php bin/asl3-node-manager-link-lookup.php; do
   php -l "$SOURCE_DIR/$file" >/dev/null || die "PHP syntax failed: $file"
 done
-python3 -m py_compile "$SOURCE_DIR/bin/asl3-node-manager-status.py" "$SOURCE_DIR/bin/asl3-node-manager-control.py" "$SOURCE_DIR/bin/asl3-node-manager-services.py" "$SOURCE_DIR/bin/asl3-node-manager-system-metrics.py" || die "Python syntax failed"
+python3 -m py_compile "$SOURCE_DIR/bin/asl3-node-manager-status.py" "$SOURCE_DIR/bin/asl3-node-manager-control.py" "$SOURCE_DIR/bin/asl3-node-manager-services.py" "$SOURCE_DIR/bin/asl3-node-manager-system-metrics.py" "$SOURCE_DIR/bin/asl3-node-manager-link.py" "$SOURCE_DIR/bin/echolink_guard.py" || die "Python syntax failed"
 rm -rf "$SOURCE_DIR/bin/__pycache__"
 bash -n "$SOURCE_DIR/bin/asl3-node-manager-helper"
 bash -n "$SOURCE_DIR/bin/asl3-node-manager"
@@ -399,17 +399,22 @@ PY
 # Preserve Git repository metadata permissions.
 find "$APP_DIR" -path "$APP_DIR/.git" -prune -o -exec chown root:root {} +
 find "$APP_DIR" -path "$APP_DIR/.git" -prune -o -type d -exec chmod 0755 {} +
+find "$APP_DIR" -path "$APP_DIR/.git" -prune -o -type d -exec chmod g-s {} +
 find "$APP_DIR" \( -path "$APP_DIR/.git" -o -path "$APP_DIR/run" -o -path "$APP_DIR/cache" \) -prune -o -type f -exec chmod 0644 {} +
-find "$APP_DIR/run" -type f -exec chmod 0644 {} +
+# Preserve existing runtime file permissions; do not broadly chmod run files.
 # DTMF Favorites contain local user data and must remain root-only.
 if [[ -f "$APP_DIR/run/dtmf_favorites.txt" ]]; then
   chmod 0600 "$APP_DIR/run/dtmf_favorites.txt"
 fi
+if [[ -f "$APP_DIR/run/link_favorites.json" ]]; then
+  chmod 0600 "$APP_DIR/run/link_favorites.json"
+fi
 find "$APP_DIR/cache" -type f -exec chmod 0644 {} +
-chmod 0755 "$APP_DIR/bin/asl3-node-manager-status.py" "$APP_DIR/bin/asl3-node-manager-control.py" "$APP_DIR/bin/asl3-node-manager-helper" "$APP_DIR/bin/asl3-node-manager" "$APP_DIR/bin/asl3-node-manager-services.py" "$APP_DIR/bin/asl3-node-manager-system-metrics.py" "$APP_DIR/setup_asl3_node_manager.sh"
+chmod 0755 "$APP_DIR/bin/asl3-node-manager-status.py" "$APP_DIR/bin/asl3-node-manager-control.py" "$APP_DIR/bin/asl3-node-manager-helper" "$APP_DIR/bin/asl3-node-manager" "$APP_DIR/bin/asl3-node-manager-services.py" "$APP_DIR/bin/asl3-node-manager-system-metrics.py" "$APP_DIR/bin/asl3-node-manager-link.py" "$APP_DIR/setup_asl3_node_manager.sh"
 chown root:www-data "$CONFIG"; chmod 0640 "$CONFIG"
 chown -R root:root "$APP_DIR/run" "$APP_DIR/cache"
 find "$APP_DIR/run" "$APP_DIR/cache" -type d -exec chmod 0755 {} +
+find "$APP_DIR/run" "$APP_DIR/cache" -type d -exec chmod g-s {} +
 touch "$APP_DIR/run/control.log"; chown root:root "$APP_DIR/run/control.log"; chmod 0644 "$APP_DIR/run/control.log"
 
 install -o root -g root -m 0755 "$APP_DIR/bin/asl3-node-manager-helper" "$HELPER_DST"
@@ -440,8 +445,8 @@ EOF2
 a2enconf "$APACHE_NAME" >/dev/null
 a2enconf "$POLLING_NAME" >/dev/null
 
-for file in public/index.php public/status.php public/action.php public/login.php public/logout.php src/bootstrap.php src/auth.php src/NodeIdentity.php src/EchoLink.php src/CacheMaintenance.php bin/asl3-node-manager-echolink.php bin/asl3-node-manager-appearance.php public/services.php public/backup_download.php; do php -l "$APP_DIR/$file" >/dev/null; done
-python3 -m py_compile "$APP_DIR/bin/asl3-node-manager-status.py" "$APP_DIR/bin/asl3-node-manager-control.py" "$APP_DIR/bin/asl3-node-manager-services.py" "$APP_DIR/bin/asl3-node-manager-system-metrics.py"; rm -rf "$APP_DIR/bin/__pycache__"
+for file in public/index.php public/status.php public/action.php public/login.php public/logout.php src/bootstrap.php src/auth.php src/NodeIdentity.php src/EchoLink.php src/CacheMaintenance.php bin/asl3-node-manager-echolink.php bin/asl3-node-manager-appearance.php public/services.php public/backup_download.php public/link.php bin/asl3-node-manager-link-lookup.php; do php -l "$APP_DIR/$file" >/dev/null; done
+python3 -m py_compile "$APP_DIR/bin/asl3-node-manager-status.py" "$APP_DIR/bin/asl3-node-manager-control.py" "$APP_DIR/bin/asl3-node-manager-services.py" "$APP_DIR/bin/asl3-node-manager-system-metrics.py" "$APP_DIR/bin/asl3-node-manager-link.py" "$APP_DIR/bin/echolink_guard.py"; rm -rf "$APP_DIR/bin/__pycache__"
 bash -n "$APP_DIR/bin/asl3-node-manager-helper"; bash -n "$APP_DIR/bin/asl3-node-manager"; bash -n "$APP_DIR/setup_asl3_node_manager.sh"
 if command -v node >/dev/null; then node --check "$APP_DIR/public/assets/app.js" >/dev/null; fi
 apache2ctl configtest >/dev/null

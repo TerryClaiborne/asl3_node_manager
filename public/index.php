@@ -17,7 +17,7 @@ $appearanceStyle = manager_appearance_style($appearance);
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="light dark">
   <title>ASL3 Node Manager</title>
-  <link rel="stylesheet" href="assets/style.css?v=<?=rawurlencode($version)?>">
+  <link rel="stylesheet" href="assets/style.css?v=<?=rawurlencode($version)?>-<?=filemtime(__DIR__ . "/assets/style.css")?>">
   <script>window.ASL3_NODE_MANAGER_APPEARANCE=<?=json_encode($appearance, JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE)?>;</script>
 </head>
 <body data-can-control="<?=$canControl ? '1' : '0'?>" data-csrf="<?=htmlspecialchars($csrf, ENT_QUOTES, 'UTF-8')?>">
@@ -71,7 +71,7 @@ $appearanceStyle = manager_appearance_style($appearance);
   </header>
 
   <section class="status-tabs" aria-label="Node summary"><div class="status-tab"><span>ASL3</span><b id="systemTop">—</b></div><div class="status-tab"><span>RX</span><b id="rxTop">—</b></div><div class="status-tab"><span>TX</span><b id="txTop">—</b></div><div class="status-tab"><span>CONNECTIONS</span><b id="linksTop">0</b></div></section>
-  <nav class="section-switcher" aria-label="Node Manager sections"><button type="button" class="section-tab active" data-mobile-panel="statusPanel">Status</button><button type="button" class="section-tab" data-mobile-panel="linksPanel">Connections</button><button type="button" class="section-tab" data-mobile-panel="controlsPanel">Controls</button><button type="button" class="section-tab" data-mobile-panel="servicesPanel">Services</button></nav>
+  <nav class="section-switcher" aria-label="Node Manager sections"><button type="button" class="section-tab active" data-mobile-panel="statusPanel">Status</button><button type="button" class="section-tab" data-mobile-panel="linkPanel">Link</button><button type="button" class="section-tab" data-mobile-panel="linksPanel">Connections</button><button type="button" class="section-tab" data-mobile-panel="controlsPanel">Controls</button><button type="button" class="section-tab" data-mobile-panel="servicesPanel">Services</button></nav>
 
   <main class="dashboard">
     <section class="panel mobile-panel active" id="statusPanel">
@@ -96,10 +96,50 @@ $appearanceStyle = manager_appearance_style($appearance);
       <div class="panel-head compact-head"><div><div class="eyebrow">LIVE CONNECTIONS</div><h2>Current Connections</h2></div><span class="connections-head-actions"><span class="count-badge" id="directCount">0</span><button type="button" id="mobileConnectionsToggle" class="mobile-connections-toggle" aria-expanded="true" aria-controls="mobileConnectionsContent" hidden>Hide</button></span></div>
       <div id="mobileConnectionsContent">
       <div id="connectionActionResult" class="action-result" hidden></div>
-      <div class="links-table"><div class="link-row link-head"><span>STATUS</span><span>DIRECTION</span><span>NODE / STATION</span><span>MODE</span><span>ACTIONS</span></div><div id="linksBody"><div class="empty">Waiting for status…</div></div></div>
+      <div class="links-table"><div class="link-row link-head"><span>STATUS</span><span>DIRECTION</span><span>NODE / STATION</span><span>MODE</span><span class="desktop-connection-detail">TIME</span><span class="desktop-connection-detail">LINK</span><span class="desktop-connection-detail" title="Save an active station to Link Favorites">FAVORITE</span><span>ACTIONS</span></div><div id="linksBody"><div class="empty">Waiting for status…</div></div></div>
       <div class="compact-note">Node Restore automatically reconnects only proven outbound numeric AllStar links. WT and EchoLink are disconnect-only.</div>
       </div>
       <div class="blocked-section"><div class="panel-head compact-head blocked-head"><div><div class="eyebrow">DENYLIST</div><h2>Blocked Nodes</h2></div><span class="count-badge" id="blockedCount">0</span></div><div class="blocked-table"><div class="blocked-row blocked-head-row"><span>NODE</span><span>REASON</span><span>ACTION</span></div><div id="blockedBody"><div class="empty">No blocked nodes.</div></div></div></div>
+    </section>
+
+    <section class="panel mobile-panel" id="linkPanel" aria-labelledby="linkPanelTitle">
+      <div class="panel-head compact-head"><div><div class="eyebrow">OUTBOUND CONNECTIONS</div><h2 id="linkPanelTitle">Link &amp; Favorites</h2></div><span class="control-lock <?=$canControl ? 'ready' : ''?>"><?=$canControl ? 'Ready' : 'Login required'?></span></div>
+      <div class="link-workspace">
+        <section class="link-card" aria-labelledby="linkConnectHeading">
+          <div class="link-card-title"><h3 id="linkConnectHeading" title="Enter an AllStarLink or EchoLink target, search by callsign, or load a Favorite to connect.">Connect</h3></div>
+          <div class="link-network-options" role="radiogroup" aria-label="Network">
+            <label class="link-network-choice" title="Connect to an AllStarLink node"><input type="radio" name="linkNetwork" value="ASL" checked><span>AllStarLink</span></label>
+            <label class="link-network-choice" title="EchoLink allows multiple incoming callers, but only one outgoing link; outbound requests are blocked while incoming callers are active"><input type="radio" name="linkNetwork" value="ECHO" disabled><span>EchoLink</span></label>
+          </div>
+          <label class="link-field" for="linkTarget" title="Enter a node number or search an exact callsign"><span>Node Number or Callsign</span></label>
+          <div class="link-target-row">
+            <input id="linkTarget" title="AllStarLink or EchoLink node number, or callsign to look up" type="text" maxlength="40" autocomplete="off" spellcheck="false" placeholder="AllStar node or callsign" aria-label="Node number or callsign">
+            <button type="button" id="linkLookup" title="Search for this station" aria-label="Search station" class="link-icon-button" <?=$canControl?'':'disabled'?>><svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6"/><path d="m16 16 5 5"/></svg></button>
+            <button type="button" id="linkSaveFavorite" title="Save or edit Link Favorite" aria-label="Save Favorite" class="link-icon-button link-star" <?=$canControl?'':'disabled'?>>★</button>
+          </div>
+          <button type="button" id="linkConnect" title="Connect the selected station in the chosen Transceive or Local Monitor mode. Existing connections are not changed." class="link-connect-btn" <?=$canControl?'':'disabled'?>>CONNECT</button>
+          <fieldset class="link-modes"><legend title="Choose Transceive or Local Monitor before connecting. Changing this selection does not alter any active connection; disconnect first to reconnect in a different mode.">Link Mode</legend><div class="link-mode-options">
+            <label title="Two-way audio: Transceive"><input type="radio" name="linkMode" value="transceive" checked><span>Transceive</span></label>
+            <label title="Receive the remote audio locally without retransmitting it"><input type="radio" name="linkMode" value="local_monitor"><span>Local Monitor</span></label>
+          </div></fieldset>
+          <label class="link-audio-option" title="Announce actual connected and disconnected stations through this device when the page is open. Turn off any time."><input id="linkAudioAlerts" type="checkbox"><span>Audio alerts</span></label>
+          <div id="linkResult" class="action-result link-result" role="status" aria-live="polite" hidden></div>
+        </section>
+        <section class="link-card link-fav-card" aria-labelledby="linkFavoritesHeading">
+          <div class="link-card-title"><h3 id="linkFavoritesHeading" title="Saved Link Favorites. Load a station to use its saved network and mode. Edit and Delete are visible alongside Load on all screens.">Favorites</h3><span class="link-subtitle" id="linkFavoriteCount"></span></div>
+          <input id="linkFavoriteSearch" title="Filter saved Link Favorites by number, name, description or network" type="search" maxlength="60" placeholder="Search Favorites" aria-label="Search Link Favorites">
+          <div class="link-fav-head" aria-hidden="true"><span>NODE</span><span>STATION</span><span>NETWORK</span><span>ACTIONS</span></div>
+          <div id="linkFavorites" class="link-favorites"><div class="empty">Loading Favorites…</div></div>
+        </section>
+      </div>
+      <div class="link-modal" id="linkLookupDialog" hidden role="dialog" aria-modal="true" aria-labelledby="linkLookupDialogTitle">
+        <div class="link-modal-inner"><div class="link-modal-head"><h3 id="linkLookupDialogTitle">Select Station</h3><button type="button" data-link-close="linkLookupDialog" aria-label="Close lookup">Close ×</button></div><div id="linkLookupMatches"></div></div>
+      </div>
+      <div class="link-modal" id="linkFavoriteDialog" hidden role="dialog" aria-modal="true" aria-labelledby="linkFavoriteDialogTitle">
+        <div class="link-modal-inner"><div class="link-modal-head"><h3 id="linkFavoriteDialogTitle">Save Favorite</h3><button type="button" data-link-close="linkFavoriteDialog" aria-label="Close Favorite">Close ×</button></div>
+          <form id="linkFavoriteForm"><label>Node <input id="linkFavTarget" readonly></label><label>Station Name <input id="linkFavName" maxlength="96" required></label><label>Description <input id="linkFavDescription" maxlength="160"></label><div class="link-modal-actions"><button type="button" data-link-close="linkFavoriteDialog">Cancel</button><button type="submit" class="link-connect-btn" <?=$canControl?'':'disabled'?>>Save Favorite</button></div></form>
+        </div>
+      </div>
     </section>
 
     <section class="panel mobile-panel" id="controlsPanel">
@@ -126,7 +166,7 @@ $appearanceStyle = manager_appearance_style($appearance);
           <div class="control-group-head"><div><div class="eyebrow">NODE STATE</div><h3>Isolation / Restore</h3></div><p>Take the ASL3 node offline, or restore the saved operating state and eligible outbound numeric links.</p></div>
           <div class="control-actions node-state-actions">
             <div class="control-item"><button class="control-btn danger" data-action="node-offline" data-confirm="Take this ASL3 node offline?" <?=$canControl ? '' : 'disabled'?>>Take ASL3 Node Offline</button><button type="button" class="control-help" aria-label="About Take ASL3 Node Offline" data-help="Save state, block new incoming connections, disconnect AllStar/WT/EchoLink, disable link commands, then disable the ASL3 system.">i</button></div>
-            <div class="control-item"><button class="control-btn success" data-action="node-restore" data-confirm="Restore the saved ASL3 operating state and reconnect only proven-safe outbound numeric links?" <?=$canControl ? '' : 'disabled'?>>Restore ASL3 Node + Eligible Links</button><button type="button" class="control-help" aria-label="About Restore ASL3 Node" data-help="Restore saved System, link-command, and incoming state. Only proven outbound numeric AllStar links are auto-restored.">i</button></div>
+            <div class="control-item"><button class="control-btn success" data-action="node-restore" data-confirm="Restore the saved ASL3 operating state and reconnect only proven-safe outbound numeric links?" <?=$canControl ? '' : 'disabled'?>>Restore ASL3 Node + Eligible Links</button><button type="button" class="control-help" aria-label="About Restore ASL3 Node" data-help="Restore saved System, link-command, and incoming state. Only proven outbound numeric AllStar links are auto-restored. Reconnection may take about 10 seconds. Unknown or unverified modes are skipped and reported.">i</button></div>
           </div>
           <div class="compact-note">Restore never guesses: inbound AllStar, WT, EchoLink, and unknown-mode sessions reconnect separately.</div>
         </section>

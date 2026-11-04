@@ -9,3 +9,4 @@
 *.rej
 *.pyc
 __pycache__/
+/PACKAGE-HASHES.txt

@@ -6,18 +6,21 @@ ASL3 Node Manager provides a simple, mobile-friendly web interface and command-l
 
 ## Screenshots
 
-Shown in panel order, **left to right**:
+Shown in dashboard tab order: **Status → Link → Connections → Controls → Services**.
 
-**Status**  
+**Status**
 ![Status panel](screenshot-status.png)
 
-**Connections**  
+**Link**
+![Link & Favorites panel](screenshot-link.png)
+
+**Connections**
 ![Connections panel](screenshot-connections.png)
 
-**Controls**  
+**Controls**
 ![Controls panel](screenshot-controls.png)
 
-**Services**  
+**Services**
 ![Services panel](screenshot-services.png)
 
 ## Status
@@ -30,8 +33,13 @@ The Status panel displays 20 monitoring blocks in two groups.
 
 RX/TX channel information appears below the blocks. System metrics are refreshed approximately every 5 seconds while dashboard status polling continues every 1 second. Unavailable hardware measurements display N/A.
 
-The dashboard refreshes every **1 second** while open.
+## Link & Favorites
 
+The **Link** panel connects to AllStarLink or EchoLink by node number or callsign lookup. Select **Transceive** or **Local Monitor Only** before connecting; switching modes requires disconnecting and reconnecting. A disabled EchoLink option indicates that the channel driver is unavailable. EchoLink outgoing connections are limited to one at a time, and incoming callers are protected by the guarded connection sequence.
+
+**Link Favorites** are separate from Services DTMF Favorites. On mobile, each Favorite shows its station and description beneath the node number, with Load, Edit and Delete controls alongside. Save a node, station name, description, network and selected mode; search, Load, Edit or Delete from the Link panel. Loading a Favorite does not connect until you press Connect. Favorites saved on another device appear after refreshing that device; live cross-browser synchronization is not enabled.
+
+Optional **Audio Alerts** announce connection changes with a language-matched browser voice (Microsoft Zira preferred on compatible Windows installations). Speech availability depends on your browser/device. The setting persists across sessions.
 
 ## Connections
 
@@ -65,13 +73,13 @@ The Controls tab provides five node-wide actions:
 
 **How connection restore works**
 
-**Outgoing connection from your node:**  
-Node Manager can restore it automatically.
+**Outgoing connection from your node:**
+Node Manager restores it automatically only when its current session and original mode can be verified as Transceive.
 
-**Incoming connection to your node:**  
+**Incoming connection to your node:**
 Node Manager cannot recreate that same incoming session. It can only turn incoming access back on so the remote node can reconnect.
 
-Automatic reconnection applies only to eligible outgoing numeric AllStar links with a known saved mode. WT/IAX2 and EchoLink sessions are not automatically reconnected.
+Automatic reconnection currently supports verified outgoing **Transceive** (`ilink 3`) links. **Local Monitor Only** (`ilink 8`) and ambiguous receive-only connections are deliberately skipped rather than reconnected in a different mode. Skipped or unclassified links are reported as requiring attention. Connections changed externally (for example, through AllStar Connect) are not deliberately overridden. WT/IAX2, EchoLink, and incoming links are not automatically reconnected. Restoring an eligible Transceive link took approximately **10 seconds** in testing on node67040; actual times vary.
 
 Taking the node offline does not shut down the computer, radio, or repeater hardware.
 

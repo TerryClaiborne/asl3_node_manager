@@ -9,6 +9,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from echolink_guard import reset_when_idle
 
 APP_ROOT = Path(__file__).resolve().parent.parent
 STATUS = Path(os.environ.get('ASL3_NODE_MANAGER_STATUS_SCRIPT', str(APP_ROOT / 'bin' / 'asl3-node-manager-status.py')))
@@ -153,46 +154,130 @@ def snapshot_path(node):
     return SNAP_DIR / f'{node}.json'
 
 
-def save_snapshot(node, status):
-    ensure_runtime()
+def classify_snapshot_links(status):
+    """Capture observed links and conservatively select safe reconnections.
+
+    T is a reported outgoing transceive mode. R says receive-only, NOT
+    whether ilink 2 or ilink 8 established it. An xnode-only ? provides
+    even less information. We MUST NOT manufacture provenance from a
+    previously issued command because an external client may have replaced
+    the active connection in the meantime.
+    """
     eligible = []
     observed = []
+    skipped = []
     for link in status.get('adjacent_links') or []:
+        remote = str(link.get('node') or '')
+        mode = str(link.get('mode_code') or '').upper()
+        kind = str(link.get('connection_type') or '')
+        direction = str(link.get('direction') or '').upper()
         observed.append({
-            'node': str(link.get('node') or ''),
+            'node': remote,
             'display_node': str(link.get('display_node') or ''),
             'callsign': str(link.get('callsign') or ''),
-            'connection_type': str(link.get('connection_type') or ''),
-            'direction': str(link.get('direction') or ''),
-            'mode_code': str(link.get('mode_code') or ''),
+            'connection_type': kind,
+            'direction': direction,
+            'mode_code': mode,
             'mode_label': str(link.get('mode_label') or ''),
             'restore_policy': str(link.get('restore_policy') or ''),
         })
-        if (
-            link.get('restore_eligible')
-            and str(link.get('connection_type') or '') == 'node'
-            and str(link.get('direction') or '') == 'OUT'
-            and str(link.get('node') or '').isdigit()
-            and str(link.get('mode_code') or '') in ('T', 'R')
-        ):
+        if kind != 'node' or not remote.isdigit():
+            continue
+        if direction not in ('OUT', 'IN'):
+            skipped.append({
+                'node': remote, 'mode_code': mode or '?',
+                'reason': 'Numeric link direction is unclassified; cannot determine whether it requires outgoing restoration.',
+            })
+            continue
+        if direction != 'OUT':
+            continue
+        if mode == 'T':
             eligible.append({
-                'node': str(link['node']),
-                'mode_code': str(link['mode_code']),
-                'mode_label': str(link.get('mode_label') or ''),
+                'node': remote, 'mode_code': 'T', 'ilink_command': '3',
+                'mode_evidence': 'current_outgoing_status_T',
+                'mode_label': 'Transceive',
                 'callsign': str(link.get('callsign') or ''),
             })
+        else:
+            skipped.append({
+                'node': remote, 'mode_code': mode or '?',
+                'reason': ('Receive-only status does not identify ilink 2 versus ilink 8.'
+                           if mode == 'R' else
+                           'Current outgoing connection mode is not verifiable.'),
+            })
+    return eligible, observed, skipped
+
+
+def snapshot_restore_plan(snap):
+    """Revalidate restore intentions, including legacy version-1 snapshots.
+
+    Historical R entries cannot prove their original monitor command.
+    All unknown-mode outgoing links remain explicitly skipped.
+    """
+    eligible = []
+    skipped = []
+    seen = set()
+    for link in snap.get('eligible_links') or []:
+        remote = str(link.get('node') or '')
+        mode = str(link.get('mode_code') or '').upper()
+        command = str(link.get('ilink_command') or '')
+        evidence = str(link.get('mode_evidence') or '')
+        if remote in seen:
+            skipped.append({'node': remote, 'mode_code': mode or '?',
+                            'reason': 'Duplicate restore target in snapshot; repeated command suppressed.'})
+            continue
+        if not remote.isdigit() or remote == str(snap.get('node') or ''):
+            skipped.append({'node': remote, 'mode_code': mode, 'reason': 'Invalid restore target.'})
+            continue
+        seen.add(remote)
+        # T is unambiguous in both v1 and v2. Never trust an unverified
+        # command claim for R or ?. Future explicit provenance requires a
+        # separate audited session-lifetime implementation.
+        if mode == 'T' and (not command or command == '3') and (not evidence or evidence == 'current_outgoing_status_T'):
+            eligible.append({'node': remote, 'mode_code': 'T', 'ilink_command': '3',
+                             'mode_label': str(link.get('mode_label') or 'Transceive')})
+        else:
+            skipped.append({'node': remote, 'mode_code': mode or '?',
+                            'reason': 'Saved mode lacks verified command provenance; no automatic reconnect.'})
+    for link in snap.get('observed_links') or []:
+        remote = str(link.get('node') or '')
+        if remote in seen or not remote.isdigit():
+            continue
+        if str(link.get('connection_type') or '') != 'node':
+            continue
+        direction = str(link.get('direction') or '').upper()
+        if direction == 'IN':
+            continue
+        seen.add(remote)
+        skipped.append({'node': remote, 'mode_code': str(link.get('mode_code') or '?'),
+                        'reason': ('Outgoing link was observed but its saved mode is not safe to restore.'
+                                   if direction == 'OUT' else
+                                   'Numeric link direction unclassified; manual review required.')})
+    # Snapshot v2 also records skipped connections separately; preserve them
+    # even if an old/imported snapshot lacks an observed_links entry.
+    for link in snap.get('skipped_links') or []:
+        remote = str(link.get('node') or '')
+        if remote not in seen:
+            seen.add(remote)
+            skipped.append({'node': remote, 'mode_code': str(link.get('mode_code') or '?'),
+                            'reason': str(link.get('reason') or 'Mode unverified.')})
+    return eligible, skipped
+
+
+def save_snapshot(node, status):
+    ensure_runtime()
+    eligible, observed, skipped = classify_snapshot_links(status)
     data = {
-        'version': 1,
+        'version': 2,
         'node': str(node),
         'created_at': now_iso(),
         'system_was_enabled': controller_value(status, 'sys_ena') == 1,
         'linking_was_enabled': controller_value(status, 'link_ena') == 1,
-        # rpt xnode exposes iconns on current ASL3/app_rpt builds.  Preserve
-        # the raw state when available; normal operation is incoming enabled.
         'incoming_was_enabled': controller_value(status, 'iconns') != 0,
         'incoming_state_observed': controller_value(status, 'iconns'),
         'eligible_links': eligible,
         'observed_links': observed,
+        'skipped_links': skipped,
     }
     path = snapshot_path(node)
     tmp = path.with_suffix('.tmp')
@@ -245,22 +330,60 @@ def disconnect_one(node, link):
 
 
 def disconnect_all_connections(node, initial=None):
+    """Disconnect active sessions; never rapidly retry an EchoLink disconnect.
+
+    Follow AllStar Connect's direct ilink-1 / immediate 1-second settling
+    sequence for EchoLink. Uncertain EchoLink state is a partial failure, not
+    an invitation to issue another disconnect or unload a busy driver.
+    """
     attempts = []
     status = initial or read_status(node)
-    # Use targeted disconnects so normal AllStar, WT/named IAX, and EchoLink are
-    # all handled.  Re-read and retry briefly in case a session changes while
-    # the operation is running.
+    echo_attempted = set()
     for _round in range(3):
         links = list(status.get('adjacent_links') or [])
         if not links:
-            return status, True, attempts
+            return status, not any(not a.get('ok') for a in attempts), attempts
         for link in links:
-            attempts.append(disconnect_one(node, link))
+            ctype = str(link.get('connection_type') or '').lower()
+            target = str(link.get('control_target') or link.get('node') or '').strip()
+            if ctype != 'echolink':
+                attempts.append(disconnect_one(node, link))
+                continue
+            if target in echo_attempted:
+                continue
+            echo_attempted.add(target)
+            display = str(link.get('display_node') or link.get('callsign') or target)
+            if not re.fullmatch(r'3\d{6}', target):
+                attempts.append({'ok': False, 'target': target, 'display': display,
+                                 'type': 'echolink', 'detail': 'Invalid EchoLink control target'})
+                continue
+            # Asterisk may accept the command before the channel has settled.
+            # This is the direct command and immediate delay proven in AllStar Connect.
+            command = asterisk(f'rpt cmd {node} ilink 1 {target}')
+            time.sleep(1.0)
+            after, gone = wait_for(node, lambda st: live_link_by_target(st, target) is None,
+                                   timeout=5.0, interval=0.3)
+            ok = bool(command['ok'] and gone)
+            detail = command['stderr'] or command['stdout'] or ''
+            if not gone:
+                detail = (detail + ' Connection still observed; automatic retry suppressed.').strip()
+            # Only outgoing cleanup may reset the driver. The shared guard
+            # refuses a reset if *any* incoming/outgoing caller or use remains.
+            if ok and str(link.get('direction') or '').upper() == 'OUT':
+                try:
+                    reset_when_idle(node, read_status, require_idle=False)
+                except Exception as exc:
+                    ok = False
+                    detail = (detail + ' Driver cleanup requires operator attention: ' + str(exc)).strip()
+            attempts.append({'ok': ok, 'target': target, 'display': display,
+                             'type': 'echolink', 'detail': detail})
+            status = after
         time.sleep(0.35)
         status = read_status(node)
-    status, ok = wait_for(node, lambda st: int(st.get('adjacent_link_count') or 0) == 0,
-                          timeout=4.0, interval=0.35)
-    return status, ok, attempts
+    status, clear = wait_for(node,
+                            lambda st: int(st.get('adjacent_link_count') or 0) == 0,
+                            timeout=4.0, interval=0.35)
+    return status, bool(clear and all(a.get('ok') for a in attempts)), attempts
 
 
 def incoming_state(status):
@@ -290,9 +413,22 @@ def live_link_by_target(status, target):
 def disconnect_target(node, target, before):
     link = live_link_by_target(before, target)
     if not link:
-        raise RuntimeError('The selected connection is no longer present.')
+        # The browser may display a stale row after another client or remote
+        # node has already disconnected. A disconnect of an absent target is
+        # complete; never present this harmless race as a failed operation.
+        return result_payload(node, 'disconnect', 'verified',
+                              'Connection already disconnected.', before, before,
+                              target=target, echolink_cleanup='not-applicable')
     result = disconnect_one(node, link)
     if not result.get('ok'):
+        # Asterisk can report a missing target if it went away between status
+        # and command. Verify absence before deciding if this is a failure.
+        after_error = read_status(node)
+        if live_link_by_target(after_error, target) is None:
+            return result_payload(node, 'disconnect', 'verified',
+                                  'Connection already disconnected.', before, after_error,
+                                  target=target, disconnect_attempt=result,
+                                  echolink_cleanup='skipped-already-gone')
         raise RuntimeError(result.get('detail') or 'Disconnect command failed.')
     after, gone = wait_for(
         node,
@@ -303,8 +439,19 @@ def disconnect_target(node, target, before):
     ctype = str(link.get('connection_type') or '')
     display = str(link.get('display_node') or link.get('callsign') or target)
     message = f'{display} disconnected.' if gone else f'Disconnect command sent for {display}, but the connection is still observed.'
-    return result_payload(node, 'disconnect', 'verified' if gone else 'partial', message, before, after,
-                          target=target, connection_type=ctype, disconnect_attempt=result)
+    cleanup = 'not-applicable'
+    # Match the accepted AllStar Connect outgoing EchoLink cleanup sequence.
+    # Never reset the channel driver while another station or a module user
+    # remains active. Incoming EchoLink callers continue to be disconnect-only.
+    if gone and ctype.lower() == 'echolink' and str(link.get('direction') or '').upper() == 'OUT':
+        time.sleep(1.0)  # Reference disconnect settling time.
+        try:
+            cleanup = 'reset' if reset_when_idle(node, read_status, require_idle=False) else 'skipped-busy'
+        except Exception as error:
+            cleanup = 'failed'
+            message += ' EchoLink driver cleanup needs attention: ' + str(error)[:140]
+    return result_payload(node, 'disconnect', 'partial' if cleanup == 'failed' else ('verified' if gone else 'partial'), message, before, after,
+                          target=target, connection_type=ctype, disconnect_attempt=result, echolink_cleanup=cleanup)
 
 
 def clean_reason(reason):
@@ -442,11 +589,14 @@ def perform(node, action, target="", reason=""):
         incoming_ok = incoming_state(after) in (None, 0)
         failures = [a for a in attempts if not a.get('ok')]
         ok = state_ok and disconnected and incoming_ok and not failures
-        message = ('ASL3 node taken offline: new incoming connections blocked, current connections disconnected, link commands disabled, and ASL3 system disabled.'
+        skipped_links = snap.get('skipped_links') or []
+        message = ('ASL3 node taken offline; some links were skipped or could not be classified for automatic restoration.'
+                   if ok and skipped_links else
+                   'ASL3 node taken offline: new incoming connections blocked, current connections disconnected, link commands disabled, and ASL3 system disabled.'
                    if ok else
                    'Offline sequence completed, but one or more requested states need attention.')
-        return result_payload(node, action, 'verified' if ok else 'partial', message, before, after,
-                              snapshot=snap, disconnect_attempts=attempts,
+        return result_payload(node, action, 'verified' if ok and not skipped_links else 'partial', message, before, after,
+                              snapshot=snap, skipped_links=skipped_links, disconnect_attempts=attempts,
                               disconnect_failures=failures,
                               note='Physical repeater/radio power is not changed.')
 
@@ -521,14 +671,42 @@ def perform(node, action, target="", reason=""):
 
         restored = []
         failed = []
+        plan, skipped = snapshot_restore_plan(snap)
         base_ready = system_ok and linking_ok and base_stable and incoming_verified is not False
-        for link in (snap.get('eligible_links') or []) if want_system and want_linking and base_ready else []:
-            remote = str(link.get('node') or '')
-            mode = str(link.get('mode_code') or '')
-            if not remote.isdigit() or mode not in ('T', 'R'):
+        if not want_system or not want_linking:
+            for link in plan:
+                skipped.append({'node': link['node'], 'mode_code': link['mode_code'],
+                                'reason': 'Saved node or link commands were disabled.'})
+            plan = []
+        elif not base_ready:
+            for link in plan:
+                failed.append({'node': link['node'], 'mode_code': link['mode_code'],
+                               'reason': 'ASL3 controller state did not stabilize; connection not attempted.'})
+            plan = []
+        for link in plan:
+            remote = str(link['node'])
+            mode = 'T'
+            # Another controller (AllStar Connect, CLI, etc.) may already have
+            # re-established this target after the snapshot was taken. Never
+            # issue a new ilink command against an existing session: even an
+            # existing Transceive connection is not evidence we created it.
+            try:
+                current = read_status(node)
+            except Exception as exc:
+                failed.append({'node': remote, 'mode_code': mode,
+                               'reason': f'Unable to check current links before reconnect: {exc}'})
                 continue
-            ilink = '3' if mode == 'T' else '2'
-            r = asterisk(f'rpt cmd {node} ilink {ilink} {remote}')
+            if not isinstance(current.get('adjacent_links'), list):
+                failed.append({'node': remote, 'mode_code': mode,
+                               'reason': 'Current link list unavailable; automatic reconnect suppressed.'})
+                continue
+            existing = [cur for cur in current['adjacent_links']
+                        if str(cur.get('node') or '') == remote]
+            if existing:
+                skipped.append({'node': remote, 'mode_code': mode,
+                                'reason': 'Target already connected (possibly by another application); existing session left unchanged.'})
+                continue
+            r = asterisk(f'rpt cmd {node} ilink 3 {remote}')
             if not r['ok']:
                 failed.append({'node': remote, 'mode_code': mode,
                                'reason': r['stderr'] or r['stdout'] or 'command failed'})
@@ -538,7 +716,7 @@ def perform(node, action, target="", reason=""):
                 for cur in status.get('adjacent_links') or []:
                     if (str(cur.get('node') or '') == remote
                             and str(cur.get('direction') or '') == 'OUT'
-                            and str(cur.get('mode_code') or '') == mode):
+                            and str(cur.get('mode_code') or '') == 'T'):
                         return True
                 return False
 
@@ -564,7 +742,7 @@ def perform(node, action, target="", reason=""):
         base_ok = (system_ok and linking_ok and base_stable and final_stable
                    and controller_value(after, 'sys_ena') == expected_system
                    and controller_value(after, 'link_ena') == expected_linking)
-        overall = base_ok and incoming_ok and not failed
+        overall = base_ok and incoming_ok and not failed and not skipped
         msg = ('ASL3 node restored to its saved operating state.' if overall
                else 'ASL3 node restore completed with items requiring attention.')
 
@@ -572,11 +750,12 @@ def perform(node, action, target="", reason=""):
         snap['last_restore_at'] = now_iso()
         snap['last_restore_restored'] = restored
         snap['last_restore_failed'] = failed
+        snap['last_restore_skipped'] = skipped
         path = snapshot_path(node)
         path.write_text(json.dumps(snap, indent=2, sort_keys=True) + '\n', encoding='utf-8')
         os.chmod(path, 0o644)
         return result_payload(node, action, 'verified' if overall else 'partial', msg, before, after,
-                              restored_links=restored, failed_links=failed,
+                              restored_links=restored, failed_links=failed, skipped_links=skipped,
                               restore_checks={
                                   'system_stable': system_ok,
                                   'linking_stable': linking_ok,
@@ -584,7 +763,7 @@ def perform(node, action, target="", reason=""):
                                   'base_stable': base_stable,
                                   'final_stable': final_stable,
                               },
-                              note='Inbound AllStar, Web Transceiver, EchoLink, and mode-unknown links are not auto-restored.')
+                              note='Inbound AllStar, Web Transceiver, EchoLink, and unverified monitor modes are not auto-restored.')
 
     raise RuntimeError('Unsupported action.')
 

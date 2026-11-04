@@ -3,6 +3,8 @@ set -euo pipefail
 APP_DIR="/var/www/html/asl3_node_manager"
 STATUS="$APP_DIR/bin/asl3-node-manager-status.py"
 CONTROL="$APP_DIR/bin/asl3-node-manager-control.py"
+LINK="$APP_DIR/bin/asl3-node-manager-link.py"
+LOOKUP="$APP_DIR/bin/asl3-node-manager-link-lookup.php"
 APPEARANCE="$APP_DIR/bin/asl3-node-manager-appearance.php"
 CONFIG="$APP_DIR/config.ini"
 usage(){ echo "Usage: $0 ACTION NODE [TARGET] [REASON]" >&2; exit 2; }
@@ -25,6 +27,11 @@ case "$action" in
     backup="/var/asl-backups/$target"
     [[ -f "$backup" && ! -L "$backup" ]] || { echo "Official backup unavailable" >&2; exit 1; }
     exec /bin/cat -- "$backup"
+    ;;
+  link|link-lookup)
+    [[ -z "$target" && -z "$reason" ]] || usage
+    if [[ "$action" == "link" ]]; then exec /usr/bin/python3 "$LINK" "$node"; fi
+    exec /usr/bin/php "$LOOKUP"
     ;;
   services)
     [[ -z "$target" && -z "$reason" ]] || usage
