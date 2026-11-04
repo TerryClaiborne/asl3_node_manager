@@ -23,6 +23,17 @@ Shown in dashboard tab order: **Status → Link → Connections → Controls →
 **Services**
 ![Services panel](screenshot-services.png)
 
+## Improvements in v1.0.2
+
+- Compact desktop scrolling for Link Favorites (5 rows), Current Connections (8), Blocked Nodes (8), configuration backups (12), and DTMF Favorites (10).
+- Improved Favorites sorting by Node, Station, and Network. Network sorting groups entries by network, then orders them numerically by node number.
+- Search Connections by node or station, with improved search-field readability and compact Clear (X) buttons.
+- Display updated saved Favorite descriptions in Current Connections.
+- Consistent ASL, E/L, and WT network indicators.
+- Improved update Star hover information and tooltips for the five main tabs.
+- Manual Block Node popup for entering an AllStar node number and optional reason, using the existing authorized denylist mechanism.
+- Preserved cellphone-friendly scrolling and keyed-station priority in Current Connections.
+
 ## Status
 
 The Status panel displays 20 monitoring blocks in two groups.

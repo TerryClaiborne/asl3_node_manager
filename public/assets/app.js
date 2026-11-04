@@ -11,12 +11,59 @@ const ctlWord=(v,yes='ENABLED',no='DISABLED')=>v===undefined||v===null?'UNKNOWN'
 const telemetryWord=v=>v===undefined||v===null?'UNKNOWN':({0:'ENABLED',1:'DISABLED',2:'ON DEMAND'})[Number(v)]??`MODE ${v}`;
 function parseVersion(value){const m=String(value||'').trim().match(/^v?(\d+)\.(\d+)\.(\d+)/i);return m?[Number(m[1]),Number(m[2]),Number(m[3])]:null;}
 function newerVersion(remote,local){const a=parseVersion(remote),b=parseVersion(local);if(!a||!b)return false;for(let i=0;i<3;i++){if(a[i]!==b[i])return a[i]>b[i];}return false;}
-async function checkForUpdate(){const star=$('brandingStar'),label=$('updateVersion');if(!star)return;const local=String(star.dataset.localVersion||'').trim(),url=String(star.dataset.versionUrl||'').trim();star.classList.remove('has-update');star.title=local?`ASL3 Node Manager ${local}`:'ASL3 Node Manager repository';star.setAttribute('aria-label','Open the ASL3 Node Manager repository');if(label){label.hidden=true;label.textContent='';}if(!local||!url)return;try{const r=await fetch(url,{method:'GET',cache:'no-store'});if(!r.ok)return;const remote=String(await r.text()).trim();if(newerVersion(remote,local)){star.classList.add('has-update');star.title=`ASL3 Node Manager ${local} → ${remote} update available`;star.setAttribute('aria-label',`Open the ASL3 Node Manager repository. Update available from version ${local} to ${remote}.`);if(label){label.textContent=`Update available: ${local} → ${remote}`;label.hidden=false;}}}catch(_){}}
+async function checkForUpdate(){const star=$('brandingStar'),label=$('updateVersion');if(!star)return;const local=String(star.dataset.localVersion||'').trim(),url=String(star.dataset.versionUrl||'').trim();star.classList.remove('has-update');star.title=local?`ASL3 Node Manager ${local}`:'ASL3 Node Manager repository';star.setAttribute('aria-label','Open the ASL3 Node Manager repository');if(label){label.hidden=true;label.textContent='';}if(!local||!url)return;try{const r=await fetch(url,{method:'GET',cache:'no-store'});if(!r.ok)return;const remote=String(await r.text()).trim();if(newerVersion(remote,local)){star.classList.add('has-update');star.title=`ASL3 Node Manager ${local} → ${remote} update available`;star.setAttribute('aria-label',`Open the ASL3 Node Manager repository. Update available from version ${local} to ${remote}.`);if(label){label.textContent='';label.hidden=true;}}}catch(_){}}
+
+// Presentation-only row limits. All live connections remain rendered and monitored.
+// Bound by actual row geometry, not guessed pixel heights. Mobile Connections and
+// Link Favorites retain natural document scrolling.
+const rowLimitRules=[
+  ['linkFavorites',5,820],['linksBody',8,820],['blockedBody',8,820],
+  ['svcFavorites',10,0],['svcBackups',12,0],['svcOfficialBackups',12,0]
+];
+function sizeList(id,count,mobileCutoff){
+  const el=$(id);if(!el)return;
+  if(mobileCutoff && window.innerWidth<=mobileCutoff){el.style.maxHeight='';el.style.overflowY='';return;}
+  const rows=Array.from(el.children).filter(n=>n.classList.contains('link-favorite')||n.classList.contains('link-row')||n.classList.contains('blocked-row')||n.classList.contains('svc-row'));
+  if(rows.length<=count){el.style.maxHeight='';el.style.overflowY='';return;}
+  const last=rows[count-1];
+  // Offset geometry includes row padding, variable descriptions and inter-row gaps.
+  const height=last.getBoundingClientRect().bottom-el.getBoundingClientRect().top+el.scrollTop;
+  if(height>0){el.style.maxHeight=`${Math.ceil(height)}px`;el.style.overflowY='auto';}
+}
+function sizeAllLists(){for(const [id,count,mobile] of rowLimitRules)sizeList(id,count,mobile);}
+window.addEventListener('resize',()=>window.requestAnimationFrame(sizeAllLists));
+// One-click clear: input only, never sends DTMF or changes a live connection.
+function refreshClearButtons(){
+  document.querySelectorAll('.input-clear').forEach(b=>{const field=$(b.dataset.clearFor);b.hidden=!field||!field.value;});
+}
+document.addEventListener('input',e=>{if(e.target.matches('.clear-input-wrap input'))refreshClearButtons();});
+document.addEventListener('click',e=>{
+  const b=e.target.closest('.input-clear');if(!b)return;
+  const field=$(b.dataset.clearFor);if(!field)return;
+  field.value='';field.dispatchEvent(new Event('input',{bubbles:true}));refreshClearButtons();
+});
+
+let latestConnections=[];
+let favoriteDescriptions=new Map();
+function savedFavoriteForLink(link){
+  const type=String(link.connection_type||'').toLowerCase();
+  if(type==='node'){const id=String(link.display_node||link.node||'').trim();return favoriteDescriptions.get('ASL|'+id)||null;}
+  if(type==='echolink'){const official=String(link.echolink_node||'').trim();const target=/^\d{1,6}$/.test(official)?'3'+official.padStart(6,'0'):/^3\d{6}$/.test(official)?official:'';return target?favoriteDescriptions.get('ECHO|'+target)||null:null;}
+  return null;
+}
+let favoriteDescriptionSignature='';
+function syncFavoriteDescriptions(items){
+  const signature=JSON.stringify((Array.isArray(items)?items:[]).map(f=>[f.network,f.target,f.name,f.description]));
+  if(signature===favoriteDescriptionSignature)return;favoriteDescriptionSignature=signature;
+  favoriteDescriptions=new Map((Array.isArray(items)?items:[]).map(f=>[String(f.network)+'|'+String(f.target),{name:String(f.name||''),description:String(f.description||'')} ]));
+  if(latestConnections.length)renderLinks(latestConnections);
+}
 function rowIdentity(link){
   const type=String(link.connection_type||'').toLowerCase();
   const callsign=String(link.callsign||'').trim();
   const display=String(link.display_node||link.node||'?').trim();
-  const description=String(link.description||'').trim();
+  const saved=savedFavoriteForLink(link);
+  const description=saved?String(saved.description||'').trim():String(link.description||'').trim();
   const location=String(link.location||'').trim();
 
   const match=callsign.toUpperCase().match(/\b([A-Z]{1,3}[0-9][A-Z0-9]{1,4})\b/);
@@ -26,7 +73,7 @@ function rowIdentity(link){
 
   if(type==='node'){
     const main=callsign?`${display} · ${callsign}`:display;
-    const details=[description,location].filter(Boolean).join(' — ');
+    const details=(saved?[description]:[description,location]).filter(Boolean).join(' — ');
     return `<span style="display:inline-flex;align-items:center;white-space:nowrap"><b>${esc(main)}</b>${qrz}</span>${details?`<small>${esc(details)}</small>`:''}`;
   }
 
@@ -39,7 +86,7 @@ function rowIdentity(link){
       :identity?'EchoLink Conference':'EchoLink';
     const sub=display&&display!=='EchoLink ID unavailable'
       ? `${kind} · ${display}`:'EchoLink identity pending';
-    return `<span style="display:inline-flex;align-items:center;white-space:nowrap"><b>${esc(main)}</b>${qrz}</span><small>${esc(sub)}</small>`;
+    return `<span style="display:inline-flex;align-items:center;white-space:nowrap"><b>${esc(main)}</b>${qrz}</span><small>${esc(saved ? [sub,description].filter(Boolean).join(' — ') : sub)}</small>`;
   }
 
   return `<span style="display:inline-flex;align-items:center;white-space:nowrap"><b>${esc(callsign||display)}</b>${qrz}</span><small>Web Transceiver</small>`;
@@ -121,8 +168,9 @@ function favoriteFromConnection(link){
   return `<span class="desktop-connection-detail conn-fav-cell"><button type="button" class="connection-save-fav" aria-label="Save ${esc(name)} to Link Favorites" title="Save ${esc(name)} to Link Favorites" data-fav-network="${esc(network)}" data-fav-target="${esc(target)}" data-fav-name="${esc(name)}" data-fav-description="${esc(description)}" data-fav-mode="${esc(mode)}" data-fav-mode-known="${connectionModeText(link)!=='—'?'1':'0'}" ${canControl?'':'disabled'}>★</button></span>`;
 }
 function alignConnectionHead(){const body=$('linksBody'),head=document.querySelector('.links-table>.link-head');if(!body||!head)return;const width=Math.max(0,body.offsetWidth-body.clientWidth);head.style.setProperty('--connection-scroll-width',width+'px');}
-function renderLinks(links){const body=$('linksBody');body.innerHTML='';if(!Array.isArray(links)||!links.length){body.innerHTML='<div class="empty">No current connections.</div>';alignConnectionHead();return;}const ordered=links.slice().sort((a,b)=>Number(Boolean(b.keyed))-Number(Boolean(a.keyed))||String(a.display_node||a.node||'').localeCompare(String(b.display_node||b.node||''),undefined,{numeric:true,sensitivity:'base'}));for(const link of ordered){const row=document.createElement('div');row.className=link.keyed?'link-row keyed':'link-row';const st=document.createElement('span');st.innerHTML=`<span class="dot ${link.keyed?'bad':'ok'}"></span><b class="${link.keyed?'keyed-text':''}">${link.keyed?'KEYED':'CONNECTED'}</b>`;const n=document.createElement('span');n.className='node-identity';n.innerHTML=rowIdentity(link);const d=document.createElement('span');d.className='direction-cell';d.innerHTML=directionBadge(link);const m=document.createElement('span');m.innerHTML=modeBadge(link);const a=document.createElement('span');a.className='actions-cell';a.innerHTML=connectionActions(link);const elapsed=document.createElement('span');elapsed.className='desktop-connection-detail conn-time';elapsed.textContent=connectionTimeText(link);const network=document.createElement('span');network.className='desktop-connection-detail conn-network';network.textContent=connectionNetworkText(link);const favorite=document.createElement('span');favorite.className='desktop-connection-detail conn-favorite-wrapper';favorite.innerHTML=favoriteFromConnection(link);m.className='connection-mode-cell';m.innerHTML=modeBadge(link)+`<span class="desktop-mode-text">${esc(connectionModeText(link))}</span>`;row.append(st,d,n,m,elapsed,network,favorite,a);body.appendChild(row);}alignConnectionHead();}
-function renderBlocked(items){const body=$('blockedBody');if(!body)return;body.innerHTML='';$('blockedCount').textContent=String(Array.isArray(items)?items.length:0);if(!Array.isArray(items)||!items.length){body.innerHTML='<div class="empty">No blocked nodes.</div>';return;}for(const item of items){const row=document.createElement('div');row.className='blocked-row';const node=document.createElement('span'),main=item.callsign?`${item.node} · ${item.callsign}`:item.node;node.innerHTML=`<b>${esc(main)}</b>`;const reason=document.createElement('span');reason.textContent=item.reason||'Blocked';const action=document.createElement('span');action.innerHTML=canControl?actionButton('Restore Access','restore',String(item.node||''),'success',`Restore access for node ${item.node}?`):'<span class="view-only">VIEW ONLY</span>';row.append(node,reason,action);body.appendChild(row);}}
+let previousKeyed=new Set();
+function renderLinks(links){const body=$('linksBody');latestConnections=Array.isArray(links)?links:[];const query=String($('connectionSearch')?.value||'').trim().toLowerCase();const scrollBefore=body.scrollTop;const keyed=new Set(latestConnections.filter(x=>x.keyed).map(x=>String(x.connection_type||'')+'|'+String(x.control_target||x.node||'')));const keyedArrived=[...keyed].some(x=>!previousKeyed.has(x));previousKeyed=keyed;body.innerHTML='';if(!Array.isArray(links)||!links.length){body.innerHTML='<div class="empty">No current connections.</div>';alignConnectionHead();return;}const ordered=links.filter(link=>!query||[link.display_node,link.node,link.callsign,link.description,link.location,connectionNetworkText(link),savedFavoriteForLink(link)?.description].join(' ').toLowerCase().includes(query)).sort((a,b)=>Number(Boolean(b.keyed))-Number(Boolean(a.keyed))||String(a.display_node||a.node||'').localeCompare(String(b.display_node||b.node||''),undefined,{numeric:true,sensitivity:'base'}));for(const link of ordered){const row=document.createElement('div');row.className=link.keyed?'link-row keyed':'link-row';const st=document.createElement('span');st.innerHTML=`<span class="dot ${link.keyed?'bad':'ok'}"></span><b class="${link.keyed?'keyed-text':''}">${link.keyed?'KEYED':'CONNECTED'}</b>`;const n=document.createElement('span');n.className='node-identity';n.innerHTML=rowIdentity(link);const d=document.createElement('span');d.className='direction-cell';d.innerHTML=directionBadge(link);const m=document.createElement('span');m.innerHTML=modeBadge(link);const a=document.createElement('span');a.className='actions-cell';a.innerHTML=connectionActions(link);const elapsed=document.createElement('span');elapsed.className='desktop-connection-detail conn-time';elapsed.textContent=connectionTimeText(link);const network=document.createElement('span');network.className='desktop-connection-detail conn-network';network.innerHTML=modeBadge(link);const favorite=document.createElement('span');favorite.className='desktop-connection-detail conn-favorite-wrapper';favorite.innerHTML=favoriteFromConnection(link);m.className='connection-mode-cell';m.innerHTML=modeBadge(link)+`<span class="desktop-mode-text">${esc(connectionModeText(link))}</span>`;row.append(st,d,n,m,elapsed,network,favorite,a);body.appendChild(row);}sizeList('linksBody',8,820);body.scrollTop=keyedArrived&&(!query||ordered.some(x=>x.keyed))?0:scrollBefore;alignConnectionHead();}
+function renderBlocked(items){const body=$('blockedBody');if(!body)return;body.innerHTML='';$('blockedCount').textContent=String(Array.isArray(items)?items.length:0);if(!Array.isArray(items)||!items.length){body.innerHTML='<div class="empty">No blocked nodes.</div>';return;}for(const item of items){const row=document.createElement('div');row.className='blocked-row';const node=document.createElement('span'),main=item.callsign?`${item.node} · ${item.callsign}`:item.node;node.innerHTML=`<b>${esc(main)}</b>`;const reason=document.createElement('span');reason.textContent=item.reason||'Blocked';const action=document.createElement('span');action.innerHTML=canControl?actionButton('Restore Access','restore',String(item.node||''),'success',`Restore access for node ${item.node}?`):'<span class="view-only">VIEW ONLY</span>';row.append(node,reason,action);body.appendChild(row);}sizeList('blockedBody',8,820);}
 function syncAppearanceFromStatus(next){if(!next||typeof next!=='object'||Array.isArray(next))return;let changed=false;try{changed=JSON.stringify(next)!==JSON.stringify(appearance);}catch(_){return;}if(!changed)return;appearance=clone(next);applyAppearanceLocal(appearance);const menu=$('colorMenu');if(!menu||!menu.open){pending=clone(appearance);drawColors();}}
 function formatBytes(value){if(!Number.isFinite(value))return 'N/A';const units=['B','KB','MB','GB','TB'];let n=Math.max(0,value),i=0;while(n>=1024&&i<units.length-1){n/=1024;i++;}return `${n>=100?Math.round(n):n.toFixed(1)} ${units[i]}`;}
 function formatUptime(value){if(!Number.isFinite(value))return 'N/A';let s=Math.max(0,Math.floor(value));const d=Math.floor(s/86400);s%=86400;const h=Math.floor(s/3600);const m=Math.floor((s%3600)/60);return d?`${d}d ${h}h ${m}m`:`${h}h ${m}m`;}
@@ -315,7 +363,7 @@ function hideHelpTip(){const tip=$('controlHelpTip');if(!tip)return;tip.classLis
 function initControlHelp(){document.querySelectorAll('.control-help').forEach(btn=>{btn.addEventListener('mouseenter',()=>positionHelpTip(btn));btn.addEventListener('mouseleave',()=>{if(!btn.classList.contains('open'))hideHelpTip();});btn.addEventListener('focus',()=>positionHelpTip(btn));btn.addEventListener('blur',()=>{if(!btn.classList.contains('open'))hideHelpTip();});btn.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();const was=btn.classList.contains('open');document.querySelectorAll('.control-help.open').forEach(x=>x.classList.remove('open'));if(was){hideHelpTip();return;}btn.classList.add('open');positionHelpTip(btn);});});document.addEventListener('click',e=>{if(!e.target.closest('.control-help'))hideHelpTip();});window.addEventListener('resize',hideHelpTip);window.addEventListener('scroll',hideHelpTip,{passive:true});}
 function setActionResult(kind,msg,detail='',boxId='actionResult'){const box=$(boxId)||$('actionResult');if(!box)return;box.hidden=false;box.className=`action-result ${kind||''}`;box.innerHTML=`<b>${esc(msg||'Action complete')}</b>${detail?`<small>${esc(detail)}</small>`:''}`;}
 function setControlButtonsDisabled(disabled){document.querySelectorAll('.control-btn,.row-action').forEach(btn=>{btn.disabled=disabled||!canControl;});}
-async function runAction(btn){if(actionBusy||!canControl)return;const action=btn.dataset.action||'',target=btn.dataset.target||'',boxId=btn.dataset.resultBox||'actionResult',confirmText=btn.dataset.confirm||'';if(confirmText&&!window.confirm(confirmText))return;let reason='';if(action==='block'){const entered=window.prompt('Optional block reason:','Blocked with ASL3 Node Manager');if(entered===null)return;reason=entered;}actionBusy=true;setControlButtonsDisabled(true);setActionResult('working','Working…','The node is being checked before and after the command.',boxId);try{const body=new URLSearchParams({action,csrf,target,reason}),r=await fetch('action.php',{method:'POST',body,credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'}}),data=await r.json(),kind=data.result==='verified'||data.result==='accepted'?'ok':data.result==='partial'?'warn':'bad';let detail='';if(Array.isArray(data.restored_links)&&data.restored_links.length)detail+=`Restored: ${data.restored_links.map(x=>x.node).join(', ')}. `;if(Array.isArray(data.failed_links)&&data.failed_links.length)detail+=`Needs attention: ${data.failed_links.map(x=>x.node).join(', ')}. `;if(Array.isArray(data.skipped_links)&&data.skipped_links.length)detail+=`Not auto-restored (unverified or already connected): ${data.skipped_links.map(x=>x.node).join(', ')}. `;if(Number.isInteger(data.remaining_links)&&data.remaining_links>0)detail+=`${data.remaining_links} connection(s) remain. `;if(Array.isArray(data.disconnect_failures)&&data.disconnect_failures.length)detail+=`Disconnect errors: ${data.disconnect_failures.map(x=>x.display||x.target||'?').join(', ')}.`;setActionResult(kind,data.message||'Action complete.',detail.trim(),boxId);await poll();}catch(e){setActionResult('bad','Control action failed.',e instanceof Error?e.message:String(e),boxId);}finally{actionBusy=false;setControlButtonsDisabled(false);}}
+async function runAction(btn){if(actionBusy||!canControl)return;const action=btn.dataset.action||'',target=btn.dataset.target||'',boxId=btn.dataset.resultBox||'actionResult',confirmText=btn.dataset.confirm||'';if(confirmText&&!window.confirm(confirmText))return;let reason='';if(action==='block'){if(btn.dataset.reason!==undefined){reason=btn.dataset.reason;}else{const entered=window.prompt('Optional block reason:','Blocked with ASL3 Node Manager');if(entered===null)return;reason=entered;}}actionBusy=true;setControlButtonsDisabled(true);setActionResult('working','Working…','The node is being checked before and after the command.',boxId);try{const body=new URLSearchParams({action,csrf,target,reason}),r=await fetch('action.php',{method:'POST',body,credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'}}),data=await r.json(),kind=data.result==='verified'||data.result==='accepted'?'ok':data.result==='partial'?'warn':'bad';let detail='';if(Array.isArray(data.restored_links)&&data.restored_links.length)detail+=`Restored: ${data.restored_links.map(x=>x.node).join(', ')}. `;if(Array.isArray(data.failed_links)&&data.failed_links.length)detail+=`Needs attention: ${data.failed_links.map(x=>x.node).join(', ')}. `;if(Array.isArray(data.skipped_links)&&data.skipped_links.length)detail+=`Not auto-restored (unverified or already connected): ${data.skipped_links.map(x=>x.node).join(', ')}. `;if(Number.isInteger(data.remaining_links)&&data.remaining_links>0)detail+=`${data.remaining_links} connection(s) remain. `;if(Array.isArray(data.disconnect_failures)&&data.disconnect_failures.length)detail+=`Disconnect errors: ${data.disconnect_failures.map(x=>x.display||x.target||'?').join(', ')}.`;setActionResult(kind,data.message||'Action complete.',detail.trim(),boxId);await poll();return r.ok&&(data.result==='verified'||data.result==='accepted');}catch(e){setActionResult('bad','Control action failed.',e instanceof Error?e.message:String(e),boxId);return false;}finally{actionBusy=false;setControlButtonsDisabled(false);}}
 
 // Shared server-side appearance: Default/Advanced, separate Light/Dark profiles.
 const DEFAULT_APPEARANCE={theme:'dark',mode:'default',audio_alerts:false,profiles:{dark:{background:'#080E19',foreground:'#121D2F',text:'#F2F5FF',secondary:'#A9B9D4',headings:'#A9B9D4',accent:'#7458FF'},light:{background:'#EEF3FA',foreground:'#FFFFFF',text:'#142038',secondary:'#55657F',headings:'#55657F',accent:'#6550DD'}}};
@@ -356,7 +404,7 @@ function initServices(){
   let favorites=[],editing='';let busy=false;let currentDialog=null;
   const svcDialogs=['svcFavoritesDialog','svcManagerDialog','svcOfficialDialog'];
   function closeDialog(){if(!currentDialog){document.body.classList.remove('svc-dialog-open');return;}const old=currentDialog;old.hidden=true;currentDialog=null;document.body.classList.remove('svc-dialog-open');const trigger=document.getElementById(old.dataset.trigger||'');if(trigger)trigger.focus();}
-  function openDialog(id,trigger){closeDialog();const dlg=$(id);if(!dlg)return;dlg.dataset.trigger=trigger;dlg.hidden=false;currentDialog=dlg;document.body.classList.add('svc-dialog-open');dlg.querySelector('[data-svc-close]')?.focus();}
+  function openDialog(id,trigger){closeDialog();const dlg=$(id);if(!dlg)return;dlg.dataset.trigger=trigger;dlg.hidden=false;currentDialog=dlg;document.body.classList.add('svc-dialog-open');window.requestAnimationFrame(sizeAllLists);dlg.querySelector('[data-svc-close]')?.focus();}
   for(const id of svcDialogs){const dlg=$(id);dlg.querySelector('[data-svc-close]')?.addEventListener('click',closeDialog);dlg.addEventListener('click',e=>{if(e.target===dlg)closeDialog();});}
   document.addEventListener('keydown',e=>{if(e.key==='Escape'&&currentDialog)closeDialog();});
   $('svcOpenFavorites').addEventListener('click',()=>openDialog('svcFavoritesDialog','svcOpenFavorites'));
@@ -365,7 +413,7 @@ function initServices(){
   $('svcActivityClear').addEventListener('click',()=>{const log=$('svcActivityLog');if(log)log.textContent='No operations in this session.';});
   $('svcFavoriteSort').addEventListener('change',renderFavorites);
   function renderFavorites(){const mode=$('svcFavoriteSort').value;const items=[...favorites];items.sort((a,b)=>mode==='alpha'?a.name.localeCompare(b.name,undefined,{sensitivity:'base'})||a.code.localeCompare(b.code):mode==='code'?a.code.localeCompare(b.code,undefined,{numeric:true}):a.code.localeCompare(b.code,undefined,{numeric:true})||a.name.localeCompare(b.name,undefined,{sensitivity:'base'}));$('svcFavoriteCount').textContent=`${items.length} saved`;
-  $('svcFavorites').innerHTML=items.length?items.map(f=>`<div class="svc-row"><span><b>${esc(f.name)}</b><small>${esc(f.code)}</small></span><span class="svc-row-buttons"><button data-fav-load="${esc(f.code)}" title="Load into DTMF field; press Send separately">Load</button><button data-fav-edit="${esc(f.code)}" title="Edit saved Favorite">Edit</button><button data-fav-delete="${esc(f.code)}" title="Remove saved Favorite">Remove</button></span></div>`).join(''):'<div class="compact-note">No Favorites saved.</div>';}
+  $('svcFavorites').innerHTML=items.length?items.map(f=>`<div class="svc-row"><span><b>${esc(f.name)}</b><small>${esc(f.code)}</small></span><span class="svc-row-buttons"><button data-fav-load="${esc(f.code)}" title="Load into DTMF field; press Send separately">Load</button><button data-fav-edit="${esc(f.code)}" title="Edit saved Favorite">Edit</button><button data-fav-delete="${esc(f.code)}" title="Remove saved Favorite">Remove</button></span></div>`).join(''):'<div class="compact-note">No Favorites saved.</div>';sizeList('svcFavorites',10,0);}
   const safeCode=v=>String(v||'').replace(/[^0-9*#]/g,'').slice(0,14);
   const msg=(text,bad=false)=>{const e=$('svcResult');e.hidden=false;e.textContent=text;e.style.color=bad?'var(--red)':'var(--text)';
     const stamp=new Date().toLocaleString();const log=$('svcActivityLog');if(log&&text!=='Working…'){if(log.textContent==='No operations in this session.')log.textContent='';const item=document.createElement('div');item.className=bad?'svc-log-error':'svc-log-ok';item.textContent=`${stamp} — ${text}`;log.prepend(item);while(log.children.length>12)log.lastElementChild.remove();}
@@ -379,7 +427,7 @@ function initServices(){
   }
   function showManagerBackups(items){
     $('svcBackupCount').textContent=String(items.length);
-    $('svcBackups').innerHTML=items.length?items.map(b=>`<div class="svc-row"><span><b>${esc(b.name)}</b><small>${(b.bytes/1024).toFixed(1)} KB</small></span><span class="svc-row-buttons"><button data-backup-verify="${esc(b.name)}" title="Verify the archive in /var/backups/asl3-node-manager/asl3-config/ without changing the node.">Verify</button><button data-backup-download="${esc(b.name)}" title="Download this archive from /var/backups/asl3-node-manager/asl3-config/ to your browser Downloads folder or configured download location.">Download</button><button class="svc-restore-danger" data-restore-live="${esc(b.name)}" title="Restore from /var/backups/asl3-node-manager/asl3-config/. Replaces current supported files; newer changes may be lost. Creates a safety backup and restarts Asterisk.">Restore</button><button class="svc-restore-danger" data-backup-delete="${esc(b.name)}" title="Permanently delete this archive from /var/backups/asl3-node-manager/asl3-config/. Cannot be undone.">Delete</button></span></div>`).join(''):'<div class="compact-note">No configuration backups yet.</div>';
+    $('svcBackups').innerHTML=items.length?items.map(b=>`<div class="svc-row"><span><b>${esc(b.name)}</b><small>${(b.bytes/1024).toFixed(1)} KB</small></span><span class="svc-row-buttons"><button data-backup-verify="${esc(b.name)}" title="Verify the archive in /var/backups/asl3-node-manager/asl3-config/ without changing the node.">Verify</button><button data-backup-download="${esc(b.name)}" title="Download this archive from /var/backups/asl3-node-manager/asl3-config/ to your browser Downloads folder or configured download location.">Download</button><button class="svc-restore-danger" data-restore-live="${esc(b.name)}" title="Restore from /var/backups/asl3-node-manager/asl3-config/. Replaces current supported files; newer changes may be lost. Creates a safety backup and restarts Asterisk.">Restore</button><button class="svc-restore-danger" data-backup-delete="${esc(b.name)}" title="Permanently delete this archive from /var/backups/asl3-node-manager/asl3-config/. Cannot be undone.">Delete</button></span></div>`).join(''):'<div class="compact-note">No configuration backups yet.</div>';sizeList('svcBackups',12,0);
   }
   async function refresh(){if(!canControl)return;try{const d=await req('list');favorites=d.favorites||[];
     $('svcAsterisk').textContent=d.services?.asterisk||'unknown';$('svcApache').textContent=d.services?.apache2||'unknown';
@@ -391,18 +439,18 @@ function initServices(){
   }catch(e){msg(e.message,true);}}
   function showOfficialBackups(items){
     $('svcOfficialBackupCount').textContent=String(items.length);
-    $('svcOfficialBackups').innerHTML=items.length?items.map(b=>`<div class="svc-row"><span><b>${esc(b.name)}</b><small>${(b.bytes/1024).toFixed(1)} KB · official ASL3</small></span><span class="svc-row-buttons"><button data-official-verify="${esc(b.name)}" title="Verify the archive in /var/asl-backups/ without changing the node.">Verify</button><button data-official-download="${esc(b.name)}" title="Download this archive from /var/asl-backups/ to your browser Downloads folder or configured download location.">Download</button><button class="svc-restore-danger" data-official-live="${esc(b.name)}" title="Restore from /var/asl-backups/. Replaces current supported files; newer changes may be lost. Creates a safety backup and restarts Asterisk.">Restore</button><button class="svc-restore-danger" data-official-delete="${esc(b.name)}" title="Permanently delete this archive from /var/asl-backups/. Also removes it from the asl-menu backup list. Cannot be undone.">Delete</button></span></div>`).join(''):'<div class="compact-note">No official ASL3 backup archives found.</div>';
+    $('svcOfficialBackups').innerHTML=items.length?items.map(b=>`<div class="svc-row"><span><b>${esc(b.name)}</b><small>${(b.bytes/1024).toFixed(1)} KB · official ASL3</small></span><span class="svc-row-buttons"><button data-official-verify="${esc(b.name)}" title="Verify the archive in /var/asl-backups/ without changing the node.">Verify</button><button data-official-download="${esc(b.name)}" title="Download this archive from /var/asl-backups/ to your browser Downloads folder or configured download location.">Download</button><button class="svc-restore-danger" data-official-live="${esc(b.name)}" title="Restore from /var/asl-backups/. Replaces current supported files; newer changes may be lost. Creates a safety backup and restarts Asterisk.">Restore</button><button class="svc-restore-danger" data-official-delete="${esc(b.name)}" title="Permanently delete this archive from /var/asl-backups/. Also removes it from the asl-menu backup list. Cannot be undone.">Delete</button></span></div>`).join(''):'<div class="compact-note">No official ASL3 backup archives found.</div>';sizeList('svcOfficialBackups',12,0);
   }
   async function run(action,fields={}){if(busy||!canControl)return;busy=true;root.querySelectorAll('button:not([data-svc-close])').forEach(b=>b.disabled=true);
     msg('Working…');let ok=false;try{const d=await req(action,fields);ok=true;msg(d.message||'Completed.');if(Array.isArray(d.backups))showManagerBackups(d.backups);if(Array.isArray(d.official_backups))showOfficialBackups(d.official_backups);await refresh();}catch(e){msg(e.message,true);}finally{busy=false;root.querySelectorAll('button:not([data-svc-close])').forEach(b=>b.disabled=!canControl);}return ok;}
   root.querySelectorAll('button:not([data-svc-close])').forEach(b=>b.disabled=!canControl);
   $('svcDtmfCode').addEventListener('input',e=>e.target.value=safeCode(e.target.value));
   $('svcFavCode').addEventListener('input',e=>e.target.value=safeCode(e.target.value));
-  $('svcDtmfSend').addEventListener('click',async()=>{const code=safeCode($('svcDtmfCode').value);if(!code)return msg('Enter a complete DTMF command (for example *921).',true);if(await run('dtmf-send',{code})){$('svcDtmfCode').value='';msg(`DTMF ${code} submitted to Asterisk; function execution is not confirmed.`);}});
+  $('svcDtmfSend').addEventListener('click',async()=>{const code=safeCode($('svcDtmfCode').value);if(!code)return msg('Enter a complete DTMF command (for example *921).',true);if(await run('dtmf-send',{code})){$('svcDtmfCode').value='';refreshClearButtons();msg(`DTMF ${code} submitted to Asterisk; function execution is not confirmed.`);}});
   $('svcFavSave').addEventListener('click',async()=>{const code=safeCode($('svcFavCode').value),name=$('svcFavName').value.trim();if(!code)return msg('Enter a Favorite code.',true);if(!await run('favorite-save',{code,name,original_code:editing}))return;editing='';$('svcFavCode').value='';$('svcFavName').value='';$('svcFavSave').textContent='Add Favorite';$('svcFavCancel').hidden=true;});
   $('svcFavCancel').addEventListener('click',()=>{editing='';$('svcFavCode').value='';$('svcFavName').value='';$('svcFavSave').textContent='Add Favorite';$('svcFavCancel').hidden=true;});
   $('svcFavorites').addEventListener('click',e=>{const b=e.target.closest('button');if(!b||!canControl)return;const code=b.dataset.favLoad||b.dataset.favEdit||b.dataset.favDelete||'';
-    if(b.dataset.favLoad){$('svcDtmfCode').value=code;closeDialog();$('svcDtmfCode').focus();msg(`Loaded ${code}. Press Send to transmit.`);}
+    if(b.dataset.favLoad){$('svcDtmfCode').value=code;refreshClearButtons();closeDialog();$('svcDtmfCode').focus();msg(`Loaded ${code}. Press Send to transmit.`);}
     else if(b.dataset.favEdit){const f=favorites.find(x=>x.code===code);if(f){editing=code;$('svcFavCode').value=f.code;$('svcFavName').value=f.name;$('svcFavSave').textContent='Save Changes';$('svcFavCancel').hidden=false;}}
     else if(b.dataset.favDelete&&confirm(`Remove DTMF Favorite ${code}?`))run('favorite-delete',{code});});
   $('svcBackupCreate').addEventListener('click',()=>{if(confirm('Create a local ASL3 configuration backup now? Live databases may change while being archived.'))run('backup-create');});
@@ -468,6 +516,7 @@ function selectSection(panelId){
   document.querySelectorAll('.mobile-panel').forEach(panel=>{
     panel.classList.toggle('active',panel.id===panelId);
   });
+  window.requestAnimationFrame(sizeAllLists);
 }
 
 document.querySelectorAll('.section-tab').forEach(btn=>{
@@ -483,6 +532,7 @@ try{
 }catch(_){
   selectSection('statusPanel');
 }
+$('connectionSearch').addEventListener('input',()=>renderLinks(latestConnections));
 document.addEventListener('click',e=>{
   const button=e.target.closest('.connection-save-fav');
   if(!button||button.disabled||!canControl)return;
@@ -493,12 +543,53 @@ document.addEventListener('click',e=>{
   }}));
 });
 document.addEventListener('click',e=>{const btn=e.target.closest('.control-btn,.row-action');if(btn)runAction(btn);});
+
+// Manual Block Node is a small UI for the existing authorized block action.
+// No additional block commands or backend behavior are introduced here.
+function initManualBlock(){
+  const dialog=$('manualBlockDialog'),openBtn=$('openManualBlock'),form=$('manualBlockForm');
+  if(!dialog||!openBtn||!form)return;
+  const target=$('manualBlockTarget'),reason=$('manualBlockReason'),feedback=$('manualBlockFeedback'),submit=$('manualBlockSubmit');
+  let previouslyFocused=null,working=false;
+  function close(){if(working)return;dialog.hidden=true;feedback.hidden=true;previouslyFocused?.focus?.();}
+  openBtn.addEventListener('click',()=>{if(!canControl||actionBusy)return;previouslyFocused=document.activeElement;form.reset();feedback.hidden=true;dialog.hidden=false;target.focus();});
+  $('manualBlockCancel').addEventListener('click',close);
+  $('manualBlockClose').addEventListener('click',close);
+  dialog.addEventListener('click',e=>{if(e.target===dialog)close();});
+  dialog.addEventListener('keydown',e=>{
+    if(e.key==='Escape'){e.preventDefault();close();}
+    if(e.key==='Tab'){
+      const controls=[target,reason,$('manualBlockCancel'),submit,$('manualBlockClose')].filter(el=>!el.disabled);
+      const at=controls.indexOf(document.activeElement);
+      if(e.shiftKey&&at===0){e.preventDefault();controls[controls.length-1].focus();}
+      if(!e.shiftKey&&at===controls.length-1){e.preventDefault();controls[0].focus();}
+    }
+  });
+  form.addEventListener('submit',async e=>{
+    e.preventDefault();if(working||actionBusy||!canControl)return;
+    const value=target.value.trim(),local=String($('nodeValue')?.textContent||'').trim();
+    if(!/^\d{4,7}$/.test(value)||/^3\d{6}$/.test(value)||value===local){
+      feedback.textContent='Enter a valid 4–7 digit AllStar node number. EchoLink relay IDs and your own node are not allowed.';
+      feedback.hidden=false;target.focus();return;
+    }
+    const enteredReason=reason.value.trim();
+    if(!window.confirm(`Block AllStar node ${value}? If connected, it will be disconnected. Future incoming access will be denied until restored.`))return;
+    working=true;submit.disabled=true;feedback.hidden=true;
+    try{
+      const ok=await runAction({dataset:{action:'block',target:value,reason:enteredReason,resultBox:'connectionActionResult'}});
+      if(ok){working=false;close();}
+      else{feedback.textContent='Block was not verified. Review the result above Current Connections. No additional block attempt was made.';feedback.hidden=false;}
+    }finally{working=false;submit.disabled=false;}
+  });
+}
+
 function initLink(){
   const root=$('linkPanel');if(!root)return;
   const target=$('linkTarget'),result=$('linkResult'),favoritesRoot=$('linkFavorites');
   const network=()=>root.querySelector('input[name="linkNetwork"]:checked')?.value||'ASL';
   const mode=()=>root.querySelector('input[name="linkMode"]:checked')?.value||'transceive';
   let items=[],identity=null,busy=false,afterLookup=null,lastFocused=null;
+  let favoriteSortKey='',favoriteSortDirection=1;
   const echoRadio=root.querySelector('input[name="linkNetwork"][value="ECHO"]');
   let echoAvailable=false,echoCheckBusy=false;
   const echoUnavailable='EchoLink is unavailable: the channel driver is not loaded or running.';
@@ -564,7 +655,7 @@ function initLink(){
   function cleanInput(){return target.value.trim().toUpperCase();}
   function choose(id){
     if(id.network==='ECHO'&&!echoAvailable){notice(echoUnavailable);return false;}
-    identity=id;target.value=id.target;
+    identity=id;target.value=id.target;refreshClearButtons();
     if(id.network!==network())root.querySelector(`input[name="linkNetwork"][value="${id.network}"]`).checked=true;
     notice(`${id.callsign||id.target} · ${id.description||id.location||id.network}`,true);
     return true;
@@ -586,11 +677,30 @@ function initLink(){
   function renderFavorites(){
     const q=$('linkFavoriteSearch').value.trim().toLowerCase();
     const sorted=items.filter(f=>[f.target,f.name,f.description,f.network].join(' ').toLowerCase().includes(q));
+    if(favoriteSortKey){
+      sorted.sort((a,b)=>{
+        const compare=(x,y,numeric=false)=>
+          String(x||'').localeCompare(String(y||''),undefined,{numeric,sensitivity:'base'});
+        const nodeOrder=compare(a.target,b.target,true);
+        let result=0;
+        if(favoriteSortKey==='network'){
+          result=compare(a.network,b.network)||nodeOrder;
+        }else if(favoriteSortKey==='station'){
+          result=compare(a.name,b.name)||nodeOrder;
+        }else{
+          result=nodeOrder;
+        }
+        return favoriteSortDirection*result;
+      });
+    }
+    root.querySelectorAll('[data-link-sort]').forEach(b=>{const active=b.dataset.linkSort===favoriteSortKey;b.setAttribute('aria-pressed',String(active));b.querySelector('.sort-arrow').textContent=active?(favoriteSortDirection>0?'▲':'▼'):'';});
     $('linkFavoriteCount').textContent=`${items.length} saved`;
+    const previousScroll=favoritesRoot.scrollTop;
     favoritesRoot.innerHTML=sorted.length?sorted.map(f=>{
       const key=encodeURIComponent(f.network+'|'+f.target);
       return `<div class="link-favorite"><span class="link-fav-node" title="Saved node ${esc(f.target)}"><span class="link-fav-star" aria-hidden="true">★</span><b>${esc(f.target)}</b></span><span class="link-fav-station" title="${esc(f.name)}: ${esc(f.description||'')}"><b>${esc(f.name)}</b><small>${esc(f.description||'')}</small></span><span class="link-fav-network">${networkMark(f.network)}</span><div class="link-fav-actions"><button type="button" class="link-fav-load-btn" data-link-load="${esc(key)}" title="Load this station and saved mode into Connect">Load</button><button type="button" class="link-fav-edit" data-link-edit="${esc(key)}" title="Edit this saved Favorite" ${canControl?'':'disabled'}>Edit</button><button type="button" class="link-fav-delete" data-link-delete="${esc(key)}" title="Delete this saved Favorite" ${canControl?'':'disabled'}>Delete</button></div></div>`;
     }).join(''):'<div class="empty">No matching Favorites.</div>';
+    syncFavoriteDescriptions(items);sizeList('linkFavorites',5,820);favoritesRoot.scrollTop=previousScroll;refreshClearButtons();
   }
   async function refreshFavorites(silent=false){
     try{
@@ -657,7 +767,7 @@ function initLink(){
   });
   target.addEventListener('input',()=>{identity=null;});
   target.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();resolveTarget();}});
-  root.querySelectorAll('input[name="linkNetwork"]').forEach(r=>r.addEventListener('change',()=>{identity=null;target.value='';target.placeholder=network()==='ECHO'?'EchoLink number or callsign':'AllStar node or callsign';notice('');}));
+  root.querySelectorAll('input[name="linkNetwork"]').forEach(r=>r.addEventListener('change',()=>{identity=null;target.value='';refreshClearButtons();target.placeholder=network()==='ECHO'?'EchoLink number or callsign':'AllStar node or callsign';notice('');}));
   $('linkLookup').addEventListener('click',()=>resolveTarget());
   $('linkConnect').addEventListener('click',submitConnect);
   $('linkSaveFavorite').addEventListener('click',()=>openFavoriteForm());
@@ -675,13 +785,14 @@ function initLink(){
     if(requestedMode)requestedMode.checked=true;
     identity={network:f.network,target:f.target,callsign:existing?.name||f.name,
       description:existing?.description||f.description};
-    target.value=f.target;
+    target.value=f.target;refreshClearButtons();
     openFavoriteForm(existing);
     if(!existing&&!f.modeKnown){
       if(document.querySelector('.mobile-panel.active')?.id==='linksPanel')setActionResult('warn','Connection mode not reported.','Transceive is selected for this Favorite; review before saving.','connectionActionResult');
       else notice('Connection mode was not reported. Transceive is selected for this Favorite; review before saving.');
     }
   });
+  root.querySelectorAll('[data-link-sort]').forEach(b=>b.addEventListener('click',()=>{const key=b.dataset.linkSort;if(favoriteSortKey===key)favoriteSortDirection*=-1;else{favoriteSortKey=key;favoriteSortDirection=1;}renderFavorites();}));
   $('linkFavoriteSearch').addEventListener('input',renderFavorites);
   favoritesRoot.addEventListener('click',async e=>{
     const b=e.target.closest('button');if(!b)return;
@@ -708,7 +819,7 @@ function initLink(){
         // An offline EchoLink Favorite can still be edited safely; only
         // initiating a connection requires the channel driver.
         identity={network:f.network,target:f.target,callsign:f.name,description:f.description};
-        target.value=f.target;echoRadio.checked=true;
+        target.value=f.target;refreshClearButtons();echoRadio.checked=true;
         const radio=root.querySelector(`input[name="linkMode"][value="${f.mode}"]`);
         if(radio)radio.checked=true;
         openFavoriteForm(f);
@@ -721,5 +832,5 @@ function initLink(){
   refreshFavorites();
 }
 
-initLink();initServices();initControlHelp();initAppearance();setControlButtonsDisabled(false);checkForUpdate();poll();setInterval(poll,1000);
+initLink();initServices();initManualBlock();initControlHelp();initAppearance();setControlButtonsDisabled(false);checkForUpdate();poll();setInterval(poll,1000);
 })();

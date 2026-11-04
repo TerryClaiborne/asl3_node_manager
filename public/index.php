@@ -27,7 +27,7 @@ $appearanceStyle = manager_appearance_style($appearance);
       <a class="brand-repo" id="brandingStar" href="<?=htmlspecialchars($repoUrl, ENT_QUOTES, 'UTF-8')?>" target="_blank" rel="noopener noreferrer" aria-label="Open the ASL3 Node Manager repository" data-local-version="<?=htmlspecialchars($version, ENT_QUOTES, 'UTF-8')?>" data-version-url="<?=htmlspecialchars($remoteVersionUrl, ENT_QUOTES, 'UTF-8')?>" title="ASL3 Node Manager <?=htmlspecialchars($version, ENT_QUOTES, 'UTF-8')?>">
         <span class="brand-mark" aria-hidden="true"><svg class="brand-star-svg" viewBox="0 0 72 72" aria-hidden="true" focusable="false"><path class="star-outline" d="M36 4 44 25 67 26 49 40 55 64 36 51 17 64 23 40 5 26 28 25Z"/><path class="star-wave wave-one" d="M19 31c5-6 10-6 15 0s10 6 15 0"/><path class="star-wave wave-two" d="M16 39c7-8 14-8 21 0s14 8 21 0"/><circle class="star-center" cx="36" cy="35" r="3.5"/></svg></span>
       </a>
-      <div class="brand-copy"><h1>ASL3 Node Manager</h1><div class="subtitle">Node <?=htmlspecialchars($node, ENT_QUOTES, 'UTF-8')?> · ASL3 node management</div><div class="update-version" id="updateVersion" hidden></div></div>
+      <div class="brand-copy"><h1>ASL3 Node Manager</h1><div class="subtitle">Node <?=htmlspecialchars($node, ENT_QUOTES, 'UTF-8')?> · ASL3 node management</div></div>
     </div>
     <div class="header-actions">
       <button class="top-btn" id="themeToggle" type="button" title="Switch between Light and Dark themes. Your choice is saved on this node." <?=$canControl ? '' : 'disabled'?>>Light / Dark</button>
@@ -71,7 +71,7 @@ $appearanceStyle = manager_appearance_style($appearance);
   </header>
 
   <section class="status-tabs" aria-label="Node summary"><div class="status-tab"><span>ASL3</span><b id="systemTop">—</b></div><div class="status-tab"><span>RX</span><b id="rxTop">—</b></div><div class="status-tab"><span>TX</span><b id="txTop">—</b></div><div class="status-tab"><span>CONNECTIONS</span><b id="linksTop">0</b></div></section>
-  <nav class="section-switcher" aria-label="Node Manager sections"><button type="button" class="section-tab active" data-mobile-panel="statusPanel">Status</button><button type="button" class="section-tab" data-mobile-panel="linkPanel">Link</button><button type="button" class="section-tab" data-mobile-panel="linksPanel">Connections</button><button type="button" class="section-tab" data-mobile-panel="controlsPanel">Controls</button><button type="button" class="section-tab" data-mobile-panel="servicesPanel">Services</button></nav>
+  <nav class="section-switcher" aria-label="Node Manager sections"><button type="button" class="section-tab active" data-mobile-panel="statusPanel" title="Node status, system information, and live activity">Status</button><button type="button" class="section-tab" data-mobile-panel="linkPanel" title="Connect to AllStarLink or EchoLink and manage Link Favorites">Link</button><button type="button" class="section-tab" data-mobile-panel="linksPanel" title="Monitor live connections, disconnect stations, and manage blocked nodes">Connections</button><button type="button" class="section-tab" data-mobile-panel="controlsPanel" title="Manage node operating controls and settings">Controls</button><button type="button" class="section-tab" data-mobile-panel="servicesPanel" title="Manage system services, DTMF commands, and configuration backups">Services</button></nav>
 
   <main class="dashboard">
     <section class="panel mobile-panel active" id="statusPanel">
@@ -96,11 +96,26 @@ $appearanceStyle = manager_appearance_style($appearance);
       <div class="panel-head compact-head"><div><div class="eyebrow">LIVE CONNECTIONS</div><h2>Current Connections</h2></div><span class="connections-head-actions"><span class="count-badge" id="directCount">0</span><button type="button" id="mobileConnectionsToggle" class="mobile-connections-toggle" aria-expanded="true" aria-controls="mobileConnectionsContent" hidden>Hide</button></span></div>
       <div id="mobileConnectionsContent">
       <div id="connectionActionResult" class="action-result" hidden></div>
+      <div class="connection-filter-row"><label class="sr-only" for="connectionSearch">Find connected node or callsign</label><div class="clear-input-wrap"><input id="connectionSearch" type="text" placeholder="Search Connections" autocomplete="off" aria-label="Search current Connections"><button type="button" class="input-clear" data-clear-for="connectionSearch" aria-label="Clear Connections search" title="Clear search" hidden>×</button></div></div>
       <div class="links-table"><div class="link-row link-head"><span>STATUS</span><span>DIRECTION</span><span>NODE / STATION</span><span>MODE</span><span class="desktop-connection-detail">TIME</span><span class="desktop-connection-detail">LINK</span><span class="desktop-connection-detail" title="Save an active station to Link Favorites">FAVORITE</span><span>ACTIONS</span></div><div id="linksBody"><div class="empty">Waiting for status…</div></div></div>
       <div class="compact-note">Node Restore automatically reconnects only proven outbound numeric AllStar links. WT and EchoLink are disconnect-only.</div>
       </div>
-      <div class="blocked-section"><div class="panel-head compact-head blocked-head"><div><div class="eyebrow">DENYLIST</div><h2>Blocked Nodes</h2></div><span class="count-badge" id="blockedCount">0</span></div><div class="blocked-table"><div class="blocked-row blocked-head-row"><span>NODE</span><span>REASON</span><span>ACTION</span></div><div id="blockedBody"><div class="empty">No blocked nodes.</div></div></div></div>
+      <div class="blocked-section"><div class="panel-head compact-head blocked-head"><div><div class="eyebrow">DENYLIST</div><div class="blocked-title-line"><h2>Blocked Nodes</h2><span id="blockedCount" class="blocked-count-inline">0</span></div></div><div class="manual-block-head-actions"><button type="button" id="openManualBlock" class="manual-block-launch" title="Manually block an AllStar node by number; disconnects it if active and denies future incoming access. EchoLink and Web Transceiver cannot be blocked." <?=$canControl?'':'disabled'?>>Manual Block Node</button></div></div><div class="blocked-table"><div class="blocked-row blocked-head-row"><span>NODE</span><span>REASON</span><span>ACTION</span></div><div id="blockedBody"><div class="empty">No blocked nodes.</div></div></div></div>
     </section>
+      <div id="manualBlockDialog" class="manual-block-dialog" role="dialog" aria-modal="true" aria-labelledby="manualBlockTitle" hidden>
+        <div class="manual-block-box">
+          <div class="manual-block-heading"><h3 id="manualBlockTitle">Manually Block AllStar Node</h3><button type="button" id="manualBlockClose" title="Close without blocking" aria-label="Close Manual Block">×</button></div>
+          <p>Blocks future incoming access from this AllStar node. If currently connected, it will be disconnected. EchoLink and WT are disconnect-only.</p>
+          <form id="manualBlockForm">
+            <label for="manualBlockTarget">Node Number</label>
+            <input id="manualBlockTarget" type="text" inputmode="numeric" pattern="[0-9]{4,7}" maxlength="7" autocomplete="off" placeholder="4–7 digit AllStar node" required>
+            <label for="manualBlockReason">Reason (optional)</label>
+            <input id="manualBlockReason" type="text" maxlength="80" autocomplete="off" placeholder="Blocked with ASL3 Node Manager">
+            <p id="manualBlockFeedback" class="manual-block-feedback" role="status" hidden></p>
+            <div class="manual-block-footer"><button type="button" id="manualBlockCancel">Cancel</button><button type="submit" id="manualBlockSubmit" class="manual-block-danger">Block Node</button></div>
+          </form>
+        </div>
+      </div>
 
     <section class="panel mobile-panel" id="linkPanel" aria-labelledby="linkPanelTitle">
       <div class="panel-head compact-head"><div><div class="eyebrow">OUTBOUND CONNECTIONS</div><h2 id="linkPanelTitle">Link &amp; Favorites</h2></div><span class="control-lock <?=$canControl ? 'ready' : ''?>"><?=$canControl ? 'Ready' : 'Login required'?></span></div>
@@ -113,7 +128,7 @@ $appearanceStyle = manager_appearance_style($appearance);
           </div>
           <label class="link-field" for="linkTarget" title="Enter a node number or search an exact callsign"><span>Node Number or Callsign</span></label>
           <div class="link-target-row">
-            <input id="linkTarget" title="AllStarLink or EchoLink node number, or callsign to look up" type="text" maxlength="40" autocomplete="off" spellcheck="false" placeholder="AllStar node or callsign" aria-label="Node number or callsign">
+            <div class="clear-input-wrap"><input id="linkTarget" title="AllStarLink or EchoLink node number, or callsign to look up" type="text" maxlength="40" autocomplete="off" spellcheck="false" placeholder="AllStar node or callsign" aria-label="Node number or callsign"><button type="button" class="input-clear" data-clear-for="linkTarget" aria-label="Clear node or callsign" title="Clear input" hidden>×</button></div>
             <button type="button" id="linkLookup" title="Search for this station" aria-label="Search station" class="link-icon-button" <?=$canControl?'':'disabled'?>><svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6"/><path d="m16 16 5 5"/></svg></button>
             <button type="button" id="linkSaveFavorite" title="Save or edit Link Favorite" aria-label="Save Favorite" class="link-icon-button link-star" <?=$canControl?'':'disabled'?>>★</button>
           </div>
@@ -127,8 +142,8 @@ $appearanceStyle = manager_appearance_style($appearance);
         </section>
         <section class="link-card link-fav-card" aria-labelledby="linkFavoritesHeading">
           <div class="link-card-title"><h3 id="linkFavoritesHeading" title="Saved Link Favorites. Load a station to use its saved network and mode. Edit and Delete are visible alongside Load on all screens.">Favorites</h3><span class="link-subtitle" id="linkFavoriteCount"></span></div>
-          <input id="linkFavoriteSearch" title="Filter saved Link Favorites by number, name, description or network" type="search" maxlength="60" placeholder="Search Favorites" aria-label="Search Link Favorites">
-          <div class="link-fav-head" aria-hidden="true"><span>NODE</span><span>STATION</span><span>NETWORK</span><span>ACTIONS</span></div>
+          <div class="clear-input-wrap"><input id="linkFavoriteSearch" title="Filter saved Link Favorites by number, name, description or network" type="text" maxlength="60" placeholder="Search Favorites" aria-label="Search Link Favorites"><button type="button" class="input-clear" data-clear-for="linkFavoriteSearch" aria-label="Clear Favorites search" title="Clear search" hidden>×</button></div>
+          <div class="link-fav-head"><button type="button" data-link-sort="node" title="Sort Favorites by node number">NODE <span class="sort-arrow" aria-hidden="true"></span></button><button type="button" data-link-sort="station" title="Sort Favorites by station name">STATION <span class="sort-arrow" aria-hidden="true"></span></button><button type="button" data-link-sort="network" title="Sort Favorites by network">NETWORK <span class="sort-arrow" aria-hidden="true"></span></button><span>ACTIONS</span></div>
           <div id="linkFavorites" class="link-favorites"><div class="empty">Loading Favorites…</div></div>
         </section>
       </div>
@@ -188,7 +203,7 @@ $appearanceStyle = manager_appearance_style($appearance);
         </section>
         <section class="services-card"><h3>DTMF Commands</h3>
           <p>Enter the complete command, including * or # when required. Example: <strong>*921</strong> (Parrot On).</p>
-          <div class="dtmf-input-row"><input id="svcDtmfCode" maxlength="14" placeholder="Example: *921" aria-label="Complete DTMF command"><button id="svcDtmfSend" class="primary" type="button" title="Submit the entered command to Asterisk. This does not confirm the function executed.">Send</button></div>
+          <div class="dtmf-input-row"><div class="clear-input-wrap"><input id="svcDtmfCode" maxlength="14" placeholder="Example: *921" aria-label="Complete DTMF command"><button type="button" class="input-clear" data-clear-for="svcDtmfCode" aria-label="Clear DTMF command" title="Clear DTMF without sending" hidden>×</button></div><button id="svcDtmfSend" class="primary" type="button" title="Submit the entered command to Asterisk. This does not confirm the function executed.">Send</button></div>
           <div class="svc-launch-row"><span><strong>Saved Favorites</strong><small id="svcFavoriteCount">0 saved</small></span><button id="svcOpenFavorites" type="button" title="Manage Favorites. Loading a Favorite fills the command box; press Send separately.">Open Favorites</button></div>
         </section>
         <section class="services-card services-backup-card"><h3>Configuration Backups</h3>
