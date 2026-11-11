@@ -24,6 +24,7 @@ COMMITTED=0
 BACKUP_DIR=""
 APACHE_GUARD_BEFORE=""
 APACHE_GUARD_AFTER=""
+APACHE_SITE_MANIFEST=""
 
 usage(){ cat <<EOF2
 Usage: sudo $0 [--node NODE] [--set-admin-password] [--disable-auth] [--enable-auth] [--uninstall]
@@ -79,6 +80,80 @@ verify_apache_guard(){
     diff -u "$APACHE_GUARD_BEFORE" "$APACHE_GUARD_AFTER" >&2 || true
     return 1
   fi
+}
+
+# Only installer/update mode repairs Apache. Password and uninstall paths do not.
+# The guard is checked before touching any Apache site and re-established after
+# an exact, narrowly scoped replacement. All modified sites are backed up.
+restore_apache_logging_sites(){
+  local path backup failed=0
+  [[ -n "$APACHE_SITE_MANIFEST" && -f "$APACHE_SITE_MANIFEST" ]] || return 0
+  while IFS=$'\t' read -r path backup; do
+    [[ -n "$path" && -n "$backup" ]] || continue
+    if [[ -f "$backup" ]]; then
+      cp -a -- "$backup" "$path" || failed=1
+    else
+      echo "[ERROR] Missing Apache rollback backup: $backup" >&2
+      failed=1
+    fi
+  done < "$APACHE_SITE_MANIFEST"
+  return "$failed"
+}
+
+install_shared_apache_logging(){
+  # No unexpected Apache change may predate this controlled site edit.
+  verify_apache_guard || return 1
+  APACHE_SITE_MANIFEST="$BACKUP_DIR/system/apache-sites-manifest.tsv"
+  python3 - "$BACKUP_DIR/system" "$APACHE_SITE_MANIFEST" <<'PYAPACHE'
+from pathlib import Path
+import os, re, shutil, sys
+
+backup_root = Path(sys.argv[1]) / 'apache-sites'
+manifest = Path(sys.argv[2])
+sites_dir = Path('/etc/apache2/sites-available').resolve()
+enabled_dir = Path('/etc/apache2/sites-enabled')
+stock = re.compile(r'^(\s*)CustomLog\s+\$\{APACHE_LOG_DIR\}/access\.log\s+combined\s*$', re.M)
+shared = 'CustomLog ${APACHE_LOG_DIR}/access.log combined "expr=!(reqenv(\'dontlog_app_polling\') == \'1\' || (reqenv(\'dontlog_app_polling_200\') == \'1\' && %{REQUEST_STATUS} == 200))"'
+
+candidates = []
+for link in sorted(enabled_dir.glob('*.conf')):
+    try:
+        real = link.resolve(strict=True)
+    except (OSError, RuntimeError):
+        continue
+    if real.parent != sites_dir or not real.is_file():
+        print(f'[WARN] Nonstandard enabled Apache site skipped: {link}', file=sys.stderr)
+        continue
+    if real not in candidates:
+        candidates.append(real)
+
+planned = []
+for path in candidates:
+    original = path.read_text(encoding='utf-8')
+    if shared in original:
+        continue
+    updated, count = stock.subn(lambda m: m.group(1) + shared, original)
+    if count:
+        planned.append((path, original, updated))
+    elif re.search(r'^\s*CustomLog\s+.*access\.log', original, re.M):
+        print(f'[WARN] Custom Apache logging left unchanged: {path}', file=sys.stderr)
+
+# Back up every target before any live write; manifest is retained for rollback.
+if planned:
+    backup_root.mkdir(parents=True, exist_ok=True)
+    for path, _, _ in planned:
+        shutil.copy2(path, backup_root / path.name)
+    manifest.write_text(''.join(f'{path}\t{backup_root / path.name}\n' for path, _, _ in planned))
+    for path, _, updated in planned:
+        # Writing the existing file preserves ownership, permissions and symlinks.
+        path.write_text(updated, encoding='utf-8')
+        print(f'[INFO] Shared Apache polling logging installed: {path}')
+else:
+    print('[INFO] No stock Apache access-log directive required replacement.')
+PYAPACHE
+  # All intentional site edits are now known. Retain strict protection against
+  # *subsequent* changes to any Apache site or another app's polling filters.
+  apache_guard_snapshot "$APACHE_GUARD_BEFORE"
 }
 
 # Fast password-only path when invoked from the installed application.
@@ -351,6 +426,9 @@ rollback(){
   if (( EXISTED_POLLING == 1 )); then cp -a "$BACKUP_DIR/system/polling.conf" "$POLLING_CONF"; else rm -f "$POLLING_CONF"; fi
   if (( WAS_APACHE_ENABLED == 1 )); then a2enconf "$APACHE_NAME" >/dev/null 2>&1 || true; else a2disconf "$APACHE_NAME" >/dev/null 2>&1 || true; fi
   if (( WAS_POLLING_ENABLED == 1 )); then a2enconf "$POLLING_NAME" >/dev/null 2>&1 || true; else a2disconf "$POLLING_NAME" >/dev/null 2>&1 || true; fi
+  if ! restore_apache_logging_sites; then
+    echo "[ERROR] Apache site restoration failed; review $APACHE_SITE_MANIFEST" >&2
+  fi
   apache2ctl configtest >/dev/null 2>&1 && systemctl reload apache2 >/dev/null 2>&1 || true
   cleanup_temps
   exit "$rc"
@@ -444,6 +522,7 @@ EOF2
 
 a2enconf "$APACHE_NAME" >/dev/null
 a2enconf "$POLLING_NAME" >/dev/null
+install_shared_apache_logging
 
 for file in public/index.php public/status.php public/action.php public/login.php public/logout.php src/bootstrap.php src/auth.php src/NodeIdentity.php src/EchoLink.php src/CacheMaintenance.php bin/asl3-node-manager-echolink.php bin/asl3-node-manager-appearance.php public/services.php public/backup_download.php public/link.php bin/asl3-node-manager-link-lookup.php; do php -l "$APP_DIR/$file" >/dev/null; done
 python3 -m py_compile "$APP_DIR/bin/asl3-node-manager-status.py" "$APP_DIR/bin/asl3-node-manager-control.py" "$APP_DIR/bin/asl3-node-manager-services.py" "$APP_DIR/bin/asl3-node-manager-system-metrics.py" "$APP_DIR/bin/asl3-node-manager-link.py" "$APP_DIR/bin/echolink_guard.py"; rm -rf "$APP_DIR/bin/__pycache__"
@@ -468,7 +547,9 @@ verify_apache_guard
 COMMITTED=1
 trap - ERR
 POLLING_SHARED="NOT DETECTED"
-grep -Rqs "dontlog_app_polling_200" /etc/apache2/sites-enabled/*.conf 2>/dev/null && POLLING_SHARED="ACTIVE"
+if grep -RqsF "reqenv('dontlog_app_polling_200')" /etc/apache2/sites-enabled/*.conf 2>/dev/null; then
+  POLLING_SHARED="DETECTED (check all enabled sites)"
+fi
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 VERSION="$(cat "$APP_DIR/VERSION")"
 AUTH="$(php -r '$c=parse_ini_file($argv[1],false,INI_SCANNER_RAW); echo ((string)($c["ASL3_NODE_MANAGER_AUTH_ENABLED"]??"0")==="1" && trim((string)($c["ASL3_NODE_MANAGER_ADMIN_PASSWORD_HASH"]??""))!=="")?"ENABLED (user: admin)":"DISABLED";' "$CONFIG")"
